@@ -1,0 +1,15 @@
+[package]
+name = "world"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+crossbeam-channel = { workspace = true }
+futures = { workspace = true }
+arc-swap = { workspace = true }
+hub = { path = "../hub" }

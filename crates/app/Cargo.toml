@@ -1,0 +1,9 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hub = { path = "../hub" }
+world = { path = "../world" }
+smallvec = { workspace = true }

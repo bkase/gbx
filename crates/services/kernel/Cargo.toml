@@ -1,0 +1,9 @@
+[package]
+name = "services-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hub = { path = "../../hub" }
+parking_lot = { workspace = true }
+smallvec = { workspace = true }

@@ -1,0 +1,10 @@
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+app = { path = "../app" }
+hub = { path = "../hub" }
+mock = { path = "../mock" }
+world = { path = "../world" }

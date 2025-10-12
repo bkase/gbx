@@ -1,0 +1,20 @@
+# macOS cruft
+.DS_Store
+
+# devenv / direnv state
+.direnv/
+.devenv/
+.devenv.flake.nix
+devenv.local.nix
+.envrc.local
+
+# Nix outputs and caches
+result
+.result
+.cache/
+
+# Rust target artifacts
+target/
+
+# Web build output (future Trunk dist)
+web/dist/

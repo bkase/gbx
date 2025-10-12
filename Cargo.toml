@@ -1,0 +1,27 @@
+[workspace]
+members = [
+  "crates/world",
+  "crates/hub",
+  "crates/services/kernel",
+  "crates/services/gpu",
+  "crates/services/audio",
+  "crates/services/fs",
+  "crates/transport",
+  "crates/app",
+  "crates/mock",
+  "crates/tests",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1.0"
+arc-swap = "1.5"
+crossbeam-channel = "0.5"
+futures = "0.3"
+parking_lot = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+smallvec = "1.13"
+thiserror = "1.0"

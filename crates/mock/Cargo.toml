@@ -1,0 +1,11 @@
+[package]
+name = "mock"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hub = { path = "../hub" }
+services-kernel = { path = "../services/kernel" }
+services-fs = { path = "../services/fs" }
+services-gpu = { path = "../services/gpu" }
+services-audio = { path = "../services/audio" }
