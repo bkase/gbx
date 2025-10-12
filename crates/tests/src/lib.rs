@@ -1,3 +1,13 @@
+use wasm_bindgen_test::*;
+
+wasm_bindgen_test_configure!(run_in_browser);
+
+#[wasm_bindgen_test]
+fn wasm_smoke_test() {
+    // Basic smoke test to ensure wasm builds work
+    assert_eq!(1 + 1, 2);
+}
+
 #[cfg(test)]
 mod tests {
     use app::Scheduler;

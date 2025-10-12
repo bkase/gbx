@@ -8,3 +8,5 @@ app = { path = "../app" }
 hub = { path = "../hub" }
 mock = { path = "../mock" }
 world = { path = "../world" }
+wasm-bindgen = "0.2"
+wasm-bindgen-test = "0.3"
