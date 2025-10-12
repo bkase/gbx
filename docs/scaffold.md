@@ -293,43 +293,50 @@ You can add:
 
 ```toml
 [build]
-target = "wasm32-unknown-unknown"
-release = true
+target = "index.html"
+dist = "web/dist"
 
 [watch]
-ignore = ["target", "node_modules", "dist"]
+ignore = ["../target", "dist"]
 
 [serve]
 port = 8080
-open = true
+open = false
 ```
 
-**web/index.html** (minimal)
+**web/index.html** (placeholder entry point)
 
 ```html
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>GB Emulator</title>
+    <title>GBX Dev Shell</title>
   </head>
   <body>
-    <canvas id="screen"></canvas>
-    <script type="module" src="./main.ts"></script>
+    <main>
+      <h1>GBX Dev Shell</h1>
+      <p>Swap this page for your actual WASM bootstrap or Elm-style UI.</p>
+    </main>
   </body>
 </html>
 ```
 
-**web/main.ts** (thin glue; extend as your Elm-style UI matures)
+**Local dev loop with COOP/COEP headers**
 
-```ts
-import init, { run } from "../crates/app/pkg/app.js";
+```bash
+# Terminal A: continuously build the WASM bundle into web/dist
+devenv tasks run web:watch
 
-(async function main() {
-  await init(); // wasm init
-  run(); // start rAF loop; wire inputs→Intents inside app crate
-})();
+# Terminal B: serve the dist dir with required headers
+devenv tasks run web:serve
 ```
+
+The Rust server injects `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`, so browsers unlock shared-array
+buffer and WebGPU paths needed for the emulator. Add assets (JS, wasm,
+textures) under `web/` and Trunk will rebundle them into `web/dist/`.
+Pass additional CLI flags to the dev server with `--`, e.g. `devenv tasks run web:serve -- --port 9090`.
 
 ---
 

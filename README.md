@@ -22,10 +22,17 @@ Ultra-high-performance, Elm-inspired Game Boy emulator built around SIMD kernels
    ```
 
 4. **Build targets**  
-   ```bash
-   devenv tasks run build:workspace      # native crates
-   cargo build --target wasm32-unknown-unknown -p app  # WASM artifact
-   ```
+ ```bash
+ devenv tasks run build:workspace   # native crates
+ devenv tasks run build:wasm        # WASM artifact
+ ```
+
+## Web Dev Server
+
+- `devenv tasks run web:watch` — rebuilds `web/dist/` with Trunk whenever sources change (HTML, assets, wasm).
+- `devenv tasks run web:serve` — runs the Rust dev server that injects COOP/COEP headers so browsers enable SharedArrayBuffer/WebGPU.
+- Adjust the port or host by passing extra args (for example `devenv tasks run web:serve -- --host 0.0.0.0 --port 9000`); the default bind is `127.0.0.1:8080`.
+- Replace `web/index.html` with the real host page once the WASM front-end is wired up (Trunk copies it into `web/dist/`).
 
 ## Repository Layout
 

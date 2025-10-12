@@ -5,7 +5,8 @@ wasm_bindgen_test_configure!(run_in_browser);
 #[wasm_bindgen_test]
 fn wasm_smoke_test() {
     // Basic smoke test to ensure wasm builds work
-    assert_eq!(1 + 1, 2);
+    let sum: i32 = [1, 1].iter().copied().sum();
+    assert_eq!(sum, 2);
 }
 
 #[cfg(test)]

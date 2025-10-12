@@ -10,6 +10,7 @@ members = [
   "crates/app",
   "crates/mock",
   "crates/tests",
+  "crates/dev_server",
 ]
 resolver = "2"
 

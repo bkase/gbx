@@ -13,6 +13,7 @@
 - `devenv tasks run lint:workspace` — run `cargo clippy --all-targets --all-features -D warnings`.
 - `devenv tasks run build:workspace` — compile all workspace crates for native targets.
 - `devenv tasks run test:workspace` — execute `cargo test` for every crate, including integration scenarios.
+- Add a `devenv` task for every new developer workflow before documenting raw commands elsewhere.
 
 ## Coding Style & Naming Conventions
 - Rust edition 2021, four-space indentation, and `rustfmt` are mandatory; configure editors to format on save.
