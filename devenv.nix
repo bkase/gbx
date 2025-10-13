@@ -1,6 +1,6 @@
 { pkgs, config, lib, ... }:
 let
-  basePkgs = with pkgs; [ jq git fd ripgrep cargo-nextest trunk ];
+  basePkgs = with pkgs; [ jq git fd ripgrep cargo-nextest trunk wasm-pack ];
 in {
   packages = basePkgs;
 
@@ -37,6 +37,8 @@ in {
   tasks."test:fast".exec = "cargo nextest run --profile fast";
   tasks."test:slow".exec =
     "cargo nextest run --profile slow --run-ignored ignored-only";
+  tasks."test:wasm-smoke".exec =
+    "wasm-pack test --headless --chrome crates/tests";
 
   tasks."web:watch".exec = "trunk watch --config web/trunk.toml";
   tasks."web:serve".exec =
