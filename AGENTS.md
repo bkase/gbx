@@ -36,3 +36,10 @@
 ## Architecture & Services Primer
 - Scheduler budgets (`DEFAULT_INTENT_BUDGET`, `DEFAULT_REPORT_BUDGET`) encode frame pacing—update them alongside tests.
 - Service implementations must remain non-blocking; surface backpressure via `SubmitOutcome` and use deferred intents for retries.
+
+## GitHub Issues & Project Board
+- Project board lives at `https://github.com/users/bkase/projects/1` and is titled **gbx Project Kanban**; it tracks all work for this repo (including Milestone M1).
+- Use `gh issue create --repo bkase/gbx --title "<title>" --label "<owner label>" --label M1 --body-file -` and pipe the markdown checklist body via stdin to create new track/sub-track issues without prompts.
+- After creating or updating an issue, add it to the board with `gh project item-add <project_number> --owner @me --url https://github.com/bkase/gbx/issues/<num>` (project number is `1` right now).
+- Set the kanban status with `gh project item-edit --id <item_id> --project-id PVT_kwHOAAfddc4BFY_I --field-id PVTSSF_lAHOAAfddc4BFY_Izg2vZBo --single-select-option-id f75ad846` for **Todo**, or swap the option id for other states (`47fc9ee4` = In Progress, `98236657` = Done).
+- Query existing items via `gh project item-list 1 --owner @me --format json` to discover item ids before editing fields.
