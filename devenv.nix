@@ -7,7 +7,7 @@ in {
   languages.rust = {
     enable = true;
     channel = "stable";
-    version = "latest";
+    version = "1.90.0";
     components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
     targets = [ "wasm32-unknown-unknown" ];
   };
