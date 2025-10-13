@@ -206,7 +206,7 @@ impl MsgRing {
         envelope: Envelope,
         need: usize,
     ) -> Option<ProducerGrant<'_>> {
-        let total_len = ENVELOPE_LEN.checked_add(need).unwrap_or(usize::MAX);
+        let total_len = ENVELOPE_LEN.saturating_add(need);
         if total_len >= self.capacity_bytes() {
             return None;
         }

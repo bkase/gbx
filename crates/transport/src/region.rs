@@ -130,7 +130,7 @@ impl SharedRegion {
             })?;
 
         let ptr = map.as_mut_ptr();
-        if ptr as usize % alignment != 0 {
+        if !(ptr as usize).is_multiple_of(alignment) {
             return Ok(None);
         }
 

@@ -1,6 +1,6 @@
 { pkgs, config, lib, ... }:
 let
-  basePkgs = with pkgs; [ jq git fd ripgrep cargo-nextest trunk wasm-pack ];
+  basePkgs = with pkgs; [ jq git fd ripgrep cargo-nextest trunk wasm-pack chromedriver ];
 in {
   packages = basePkgs;
 
@@ -38,7 +38,7 @@ in {
   tasks."test:slow".exec =
     "cargo nextest run --profile slow --run-ignored ignored-only";
   tasks."test:wasm-smoke".exec =
-    "wasm-pack test --headless --chrome crates/tests";
+    "wasm-pack test --headless --chrome --chromedriver=$(which chromedriver) crates/tests";
 
   tasks."web:watch".exec = "trunk watch --config web/trunk.toml";
   tasks."web:serve".exec =
