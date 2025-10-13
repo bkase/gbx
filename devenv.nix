@@ -14,6 +14,11 @@ in {
 
   env = {
     CARGO_TERM_COLOR = "always";
+    # Property test defaults for fast lane (bounded)
+    PROPTEST_CASES = "32";
+    PROPTEST_TIMEOUT = "2000"; # ms for the whole property test
+    # Nicer output locally
+    NEXTEST_HIDE_PROGRESS_BAR = "0";
   };
 
   enterShell = '' '';
@@ -27,12 +32,18 @@ in {
   tasks."build:wasm".exec =
     "cargo build --target wasm32-unknown-unknown -p app";
   tasks."test:workspace".exec = "cargo test --all-targets";
+
+  # Tight test discipline tasks (stable API for CI)
+  tasks."test:fast".exec = "cargo nextest run --profile fast";
+  tasks."test:slow".exec =
+    "cargo nextest run --profile slow --run-ignored ignored-only";
+
   tasks."web:watch".exec = "trunk watch --config web/trunk.toml";
   tasks."web:serve".exec =
     "cargo run -p dev_server -- --dist web/dist --port 8080";
 
   # Git hooks for code quality enforcement
-  pre-commit.hooks = {
+  git-hooks.hooks = {
     format-check = {
       enable = true;
       name = "format:check";

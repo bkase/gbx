@@ -100,8 +100,8 @@ jobs:
       - name: Install devenv.sh
         run: nix profile install nixpkgs#devenv
 
-      - name: Unit tests
-        run: devenv tasks run test:workspace
+      - name: Fast tests (PR suite)
+        run: devenv tasks run test:fast
 
   wasm-smoke:
     runs-on: macos-14

@@ -74,4 +74,35 @@ mod tests {
         scheduler.run_once();
         assert_eq!(scheduler.world().rom_events(), 2);
     }
+
+    // Example slow test: deep exploration or heavy workload
+    // Must be marked #[ignore] and prefixed with "slow_"
+    #[test]
+    #[ignore]
+    fn slow_stress_many_intents() {
+        let world = World::new();
+        let hub = make_hub();
+        let mut scheduler = Scheduler::new(world, hub);
+        scheduler.world_mut().set_auto_pump(false);
+
+        // Load a ROM first
+        let rom_bytes = arc_bytes(4);
+        scheduler.enqueue_intent(
+            IntentPriority::P0,
+            Intent::LoadRom {
+                bytes: Arc::clone(&rom_bytes),
+            },
+        );
+        scheduler.run_once();
+        assert!(scheduler.world().rom_loaded());
+
+        // Enqueue and process many intents to stress the system
+        for _ in 0..1000 {
+            scheduler.enqueue_intent(IntentPriority::P1, Intent::PumpFrame);
+            scheduler.run_once();
+        }
+
+        // Just verify the system still works after heavy load
+        assert!(scheduler.world().rom_loaded());
+    }
 }
