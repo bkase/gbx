@@ -1,3 +1,5 @@
+//! GPU service implementation for managing frame presentation.
+
 use hub::{GpuCmd, GpuRep, GpuServiceHandle, Service, SubmitOutcome, SubmitPolicy};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -5,12 +7,14 @@ use std::sync::Arc;
 
 const DEFAULT_CAPACITY: usize = 128;
 
+/// Mock GPU service for testing and prototyping.
 pub struct GpuService {
     reports: Mutex<VecDeque<GpuRep>>,
     capacity: usize,
 }
 
 impl GpuService {
+    /// Creates a new GPU service handle with the specified report capacity.
     pub fn new_handle(capacity: usize) -> GpuServiceHandle {
         Arc::new(Self {
             reports: Mutex::new(VecDeque::with_capacity(capacity)),
@@ -57,6 +61,7 @@ impl Service for GpuService {
     }
 }
 
+/// Creates a GPU service handle with default capacity.
 pub fn default_service() -> GpuServiceHandle {
     GpuService::new_handle(DEFAULT_CAPACITY)
 }

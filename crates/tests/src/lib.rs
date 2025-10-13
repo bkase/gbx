@@ -1,3 +1,5 @@
+//! Test suite for the Game Boy emulator.
+
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);

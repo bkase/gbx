@@ -1,3 +1,5 @@
+//! Static development server with COOP/COEP headers for SharedArrayBuffer support.
+
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},

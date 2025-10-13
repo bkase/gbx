@@ -1,3 +1,5 @@
+//! Filesystem service implementation for persisting emulator data.
+
 use hub::{FsCmd, FsRep, FsServiceHandle, Service, SubmitOutcome, SubmitPolicy};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -5,12 +7,14 @@ use std::sync::Arc;
 
 const DEFAULT_CAPACITY: usize = 32;
 
+/// Mock filesystem service for testing and prototyping.
 pub struct FsService {
     reports: Mutex<VecDeque<FsRep>>,
     capacity: usize,
 }
 
 impl FsService {
+    /// Creates a new filesystem service handle with the specified report capacity.
     pub fn new_handle(capacity: usize) -> FsServiceHandle {
         Arc::new(Self {
             reports: Mutex::new(VecDeque::with_capacity(capacity)),
@@ -69,6 +73,7 @@ impl Service for FsService {
     }
 }
 
+/// Creates a filesystem service handle with default capacity.
 pub fn default_service() -> FsServiceHandle {
     FsService::new_handle(DEFAULT_CAPACITY)
 }

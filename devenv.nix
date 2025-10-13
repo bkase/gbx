@@ -10,6 +10,8 @@ in {
     version = "1.90.0";
     components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
     targets = [ "wasm32-unknown-unknown" ];
+    # Strict compilation: warnings as errors, require docs on public items
+    rustflags = "-D warnings -D missing_docs";
   };
 
   env = {

@@ -1,3 +1,5 @@
+//! Main application scheduler coordinating intents, reports, and services.
+
 use hub::{
     Intent, IntentPriority, IntentReducer, ReportReducer, ServicesHub, SubmitOutcome, SubmitPolicy,
     DEFAULT_INTENT_BUDGET, DEFAULT_REPORT_BUDGET,
@@ -5,6 +7,7 @@ use hub::{
 use std::collections::VecDeque;
 use world::World;
 
+/// Main application scheduler coordinating world state, services, and intent/report processing.
 pub struct Scheduler {
     world: World,
     hub: ServicesHub,
@@ -14,10 +17,12 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
+    /// Creates a new scheduler with default intent and report budgets.
     pub fn new(world: World, hub: ServicesHub) -> Self {
         Self::with_budgets(world, hub, DEFAULT_INTENT_BUDGET, DEFAULT_REPORT_BUDGET)
     }
 
+    /// Creates a new scheduler with custom intent and report budgets.
     pub fn with_budgets(
         world: World,
         hub: ServicesHub,
@@ -37,14 +42,17 @@ impl Scheduler {
         }
     }
 
+    /// Enqueues an intent with the specified priority.
     pub fn enqueue_intent(&mut self, priority: IntentPriority, intent: Intent) {
         self.intent_queues[priority.index()].push_back(intent);
     }
 
+    /// Enqueues an intent at the front of the P0 (highest priority) queue.
     pub fn enqueue_front_p0(&mut self, intent: Intent) {
         self.intent_queues[IntentPriority::P0.index()].push_front(intent);
     }
 
+    /// Returns the count of pending intents per priority level [P0, P1, P2].
     pub fn pending_intents(&self) -> [usize; 3] {
         [
             self.intent_queues[0].len(),
@@ -53,10 +61,12 @@ impl Scheduler {
         ]
     }
 
+    /// Returns an immutable reference to the world state.
     pub fn world(&self) -> &World {
         &self.world
     }
 
+    /// Returns a mutable reference to the world state.
     pub fn world_mut(&mut self) -> &mut World {
         &mut self.world
     }
@@ -129,6 +139,7 @@ impl Scheduler {
         }
     }
 
+    /// Runs one iteration of the scheduler: processes intents then reports.
     pub fn run_once(&mut self) {
         self.process_intents();
         self.process_reports();

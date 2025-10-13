@@ -1,3 +1,8 @@
+//! World state and intent/report reduction logic.
+//!
+//! The World struct maintains emulator state and implements the intent and report
+//! reducer traits to orchestrate the emulation loop.
+
 use hub::{
     AudioRep, AvCmd, FollowUps, FsCmd, FsRep, GpuCmd, GpuRep, Intent, IntentPriority,
     IntentReducer, KernelCmd, KernelRep, Report, ReportReducer, TickPurpose, WorkCmd,
@@ -5,6 +10,7 @@ use hub::{
 use smallvec::SmallVec;
 use std::sync::Arc;
 
+/// Emulator world state and orchestration logic.
 pub struct World {
     rom_loaded: bool,
     paused: bool,
@@ -19,6 +25,7 @@ pub struct World {
 }
 
 impl World {
+    /// Creates a new world with default initial state.
     pub fn new() -> Self {
         Self {
             rom_loaded: false,
@@ -34,30 +41,37 @@ impl World {
         }
     }
 
+    /// Returns whether a ROM has been loaded.
     pub fn rom_loaded(&self) -> bool {
         self.rom_loaded
     }
 
+    /// Returns the current display frame ID.
     pub fn frame_id(&self) -> u64 {
         self.frame_id
     }
 
+    /// Returns the count of ROM loading events.
     pub fn rom_events(&self) -> u32 {
         self.rom_events
     }
 
+    /// Returns the total count of audio buffer underruns.
     pub fn audio_underruns(&self) -> u64 {
         self.audio_underruns
     }
 
+    /// Returns whether the last save operation succeeded.
     pub fn last_save_ok(&self) -> bool {
         self.last_save_ok
     }
 
+    /// Returns whether automatic frame pumping is enabled.
     pub fn auto_pump(&self) -> bool {
         self.auto_pump
     }
 
+    /// Enables or disables automatic frame pumping.
     pub fn set_auto_pump(&mut self, value: bool) {
         self.auto_pump = value;
     }

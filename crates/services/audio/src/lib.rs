@@ -1,3 +1,5 @@
+//! Audio service implementation for managing sound playback.
+
 use hub::{AudioCmd, AudioRep, AudioServiceHandle, Service, SubmitOutcome, SubmitPolicy};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -5,12 +7,14 @@ use std::sync::Arc;
 
 const DEFAULT_CAPACITY: usize = 128;
 
+/// Mock audio service for testing and prototyping.
 pub struct AudioService {
     reports: Mutex<VecDeque<AudioRep>>,
     capacity: usize,
 }
 
 impl AudioService {
+    /// Creates a new audio service handle with the specified report capacity.
     pub fn new_handle(capacity: usize) -> AudioServiceHandle {
         Arc::new(Self {
             reports: Mutex::new(VecDeque::with_capacity(capacity)),
@@ -61,6 +65,7 @@ impl Service for AudioService {
     }
 }
 
+/// Creates an audio service handle with default capacity.
 pub fn default_service() -> AudioServiceHandle {
     AudioService::new_handle(DEFAULT_CAPACITY)
 }

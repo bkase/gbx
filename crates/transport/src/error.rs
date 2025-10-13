@@ -13,9 +13,19 @@ pub type TransportResult<T, E = TransportError> = Result<T, E>;
 /// Errors surfaced by low-level transport helpers.
 pub enum TransportError {
     /// Requested ring capacity or buffer size is below the minimum or not properly aligned.
-    InvalidCapacity { requested: usize, minimum: usize },
+    InvalidCapacity {
+        /// The capacity that was requested
+        requested: usize,
+        /// The minimum allowed capacity
+        minimum: usize,
+    },
     /// Allocation of a shared region failed for the given size/alignment pair.
-    AllocationFailed { size: usize, alignment: usize },
+    AllocationFailed {
+        /// The size of the allocation that failed
+        size: usize,
+        /// The alignment requirement of the allocation
+        alignment: usize,
+    },
 }
 
 impl fmt::Display for TransportError {

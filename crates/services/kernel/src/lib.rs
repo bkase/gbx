@@ -1,3 +1,5 @@
+//! Kernel service implementation for emulator core execution.
+
 use hub::{
     KernelCmd, KernelRep, KernelServiceHandle, Service, SubmitOutcome, SubmitPolicy, TickPurpose,
 };
@@ -8,6 +10,7 @@ use std::sync::Arc;
 
 const DEFAULT_CAPACITY: usize = 64;
 
+/// Mock kernel service for testing and prototyping.
 pub struct KernelService {
     reports: Mutex<VecDeque<KernelRep>>,
     capacity: usize,
@@ -15,6 +18,7 @@ pub struct KernelService {
 }
 
 impl KernelService {
+    /// Creates a new kernel service handle with the specified report capacity.
     pub fn new_handle(capacity: usize) -> KernelServiceHandle {
         Arc::new(Self {
             reports: Mutex::new(VecDeque::with_capacity(capacity)),
@@ -132,6 +136,7 @@ impl Service for KernelService {
     }
 }
 
+/// Creates a kernel service handle with default capacity.
 pub fn default_service() -> KernelServiceHandle {
     KernelService::new_handle(DEFAULT_CAPACITY)
 }
