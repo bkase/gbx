@@ -1,38 +1,15 @@
-use parking_lot::Mutex;
-use std::collections::VecDeque;
+//! Core transport primitives shared by native and web backends.
+//!
+//! This module exposes the foundational pieces described in the transport spec:
+//! * [`SharedRegion`] – contiguous, aligned memory slices which back the rings.
+//! * [`MsgRing`] – single-producer/single-consumer command/report queue encoded with rkyv.
+//! * [`ProducerGrant`] / [`Record`] – ergonomic producer/consumer views that avoid callbacks.
+//! * [`TransportError`] – lightweight error surface for allocation/config failures.
 
-pub struct NonBlockingQueue<T> {
-    inner: Mutex<VecDeque<T>>,
-    capacity: usize,
-}
+mod error;
+mod msg_ring;
+mod region;
 
-impl<T> NonBlockingQueue<T> {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            inner: Mutex::new(VecDeque::with_capacity(capacity)),
-            capacity,
-        }
-    }
-
-    pub fn try_push(&self, item: T) -> Result<(), T> {
-        let mut guard = self.inner.lock();
-        if guard.len() >= self.capacity {
-            Err(item)
-        } else {
-            guard.push_back(item);
-            Ok(())
-        }
-    }
-
-    pub fn try_pop(&self) -> Option<T> {
-        self.inner.lock().pop_front()
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.lock().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
-    }
-}
+pub use error::{TransportError, TransportResult};
+pub use msg_ring::{Envelope, MsgRing, ProducerGrant, Record};
+pub use region::{RegionInit, SharedRegion};

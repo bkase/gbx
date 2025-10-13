@@ -76,13 +76,13 @@ jobs:
         run: nix profile install nixpkgs#devenv
 
       - name: Build workspace (wasm)
-        run: devenv shell -- cargo build --target wasm32-unknown-unknown
+        run: devenv tasks run build:wasm
 
       - name: Upload wasm artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wasm-build
-          path: target/wasm32-unknown-unknown/debug/*.wasm
+          path: target/wasm32-unknown-unknown/debug/libapp.rlib
           retention-days: 1
 
   test:
@@ -119,14 +119,5 @@ jobs:
       - name: Install devenv.sh
         run: nix profile install nixpkgs#devenv
 
-      - name: Download wasm artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm-build
-          path: target/wasm32-unknown-unknown/debug
-
-      - name: Install wasm-pack
-        run: devenv shell -- cargo install wasm-pack
-
       - name: Basic wasm smoke test (headless)
-        run: devenv shell -- wasm-pack test --headless --chrome crates/tests
+        run: devenv tasks run test:wasm-smoke

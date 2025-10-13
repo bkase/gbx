@@ -1,13 +1,13 @@
 { pkgs, config, lib, ... }:
 let
-  basePkgs = with pkgs; [ jq git fd ripgrep cargo-nextest trunk ];
+  basePkgs = with pkgs; [ jq git fd ripgrep cargo-nextest trunk wasm-pack chromedriver ];
 in {
   packages = basePkgs;
 
   languages.rust = {
     enable = true;
     channel = "stable";
-    version = "latest";
+    version = "1.90.0";
     components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
     targets = [ "wasm32-unknown-unknown" ];
   };
@@ -37,6 +37,8 @@ in {
   tasks."test:fast".exec = "cargo nextest run --profile fast";
   tasks."test:slow".exec =
     "cargo nextest run --profile slow --run-ignored ignored-only";
+  tasks."test:wasm-smoke".exec =
+    "wasm-pack test --headless --chrome --chromedriver=$(which chromedriver) crates/tests";
 
   tasks."web:watch".exec = "trunk watch --config web/trunk.toml";
   tasks."web:serve".exec =
