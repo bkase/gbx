@@ -16,7 +16,7 @@
 //! directly, then commit to move the head pointer. Consumers peek and pop
 //! records by reading envelopes and payload slices without additional copies.
 
-use crate::region::{RegionInit, SharedRegion};
+use crate::region::{SharedRegion, Zeroed};
 use crate::{TransportError, TransportResult};
 #[cfg(feature = "loom")]
 use loom::sync::atomic::{AtomicU32, Ordering};
@@ -159,7 +159,7 @@ impl Drop for ProducerGrant<'_> {
 
 /// Single-producer / single-consumer message ring following the transport spec layout.
 pub struct MsgRing {
-    region: SharedRegion,
+    region: SharedRegion<Zeroed>,
     capacity: u32,
     default_envelope: Envelope,
     consumer_meta: Cell<Option<RecordMeta>>,
@@ -177,11 +177,13 @@ impl MsgRing {
         }
 
         let total_bytes = HEADER_SIZE + aligned_capacity;
-        let mut region = SharedRegion::new_aligned(total_bytes, ALIGN.max(64), RegionInit::Zeroed)?;
+        let mut region = SharedRegion::<Zeroed>::new_aligned_zeroed(total_bytes, ALIGN.max(64))?;
 
         // Initialise header in place.
         let header_ptr = region.as_mut_ptr() as *mut MsgRingHeader;
         unsafe {
+            // SAFETY: The pointer comes from a unique `&mut` to the freshly allocated region, so
+            // writing once here initialises the header bytes before any shared access.
             header_ptr.write(MsgRingHeader::new(aligned_capacity as u32));
         }
 
@@ -248,14 +250,14 @@ impl MsgRing {
     ///
     /// `None` indicates the ring is currently empty.
     pub fn consumer_peek(&self) -> Option<Record<'_>> {
-        let header = self.header();
+        let header = self.header_ptr();
         let capacity = self.capacity_bytes();
         let data = self.data_slice();
 
-        let mut tail = header.tail_bytes.load(Ordering::Relaxed) as usize;
+        let mut tail = unsafe { (*header).tail_bytes.load(Ordering::Relaxed) as usize };
 
         loop {
-            let head = header.head_bytes.load(Ordering::Acquire) as usize;
+            let head = unsafe { (*header).head_bytes.load(Ordering::Acquire) as usize };
             if head == tail {
                 self.consumer_meta.set(None);
                 return None;
@@ -266,7 +268,7 @@ impl MsgRing {
                 .unwrap_or_else(|| panic!("corrupt len at {tail}"));
 
             if total_len == SENTINEL {
-                header.tail_bytes.store(0, Ordering::Release);
+                unsafe { (*header).tail_bytes.store(0, Ordering::Release) };
                 tail = 0;
                 continue;
             }
@@ -299,9 +301,9 @@ impl MsgRing {
 
     /// Advances the consumer tail past the record returned by the last `consumer_peek`.
     pub fn consumer_pop_advance(&mut self) {
-        let header = self.header();
-        let tail = header.tail_bytes.load(Ordering::Relaxed) as usize;
-        let head = header.head_bytes.load(Ordering::Acquire) as usize;
+        let header = self.header_ptr();
+        let tail = unsafe { (*header).tail_bytes.load(Ordering::Relaxed) as usize };
+        let head = unsafe { (*header).head_bytes.load(Ordering::Acquire) as usize };
 
         if tail == head {
             self.consumer_meta.set(None);
@@ -321,7 +323,11 @@ impl MsgRing {
             new_tail -= capacity;
         }
 
-        header.tail_bytes.store(new_tail as u32, Ordering::Release);
+        unsafe {
+            (*header)
+                .tail_bytes
+                .store(new_tail as u32, Ordering::Release)
+        };
         self.consumer_meta.set(None);
     }
 
@@ -330,30 +336,32 @@ impl MsgRing {
         self.consumer_meta.get().map(|meta| meta.envelope)
     }
 
-    fn header(&self) -> &MsgRingHeader {
-        unsafe { &*(self.region.as_ptr() as *const MsgRingHeader) }
+    fn header_ptr(&self) -> *const MsgRingHeader {
+        self.region.as_ptr() as *const MsgRingHeader
     }
 
     fn data_slice(&self) -> &[u8] {
         let ptr = unsafe {
-            // SAFETY: `SharedRegion` allocates at least `HEADER_SIZE + capacity_bytes`
-            // contiguous bytes and remains alive for the `'self` lifetime.
+            // SAFETY: The allocation length is `HEADER_SIZE + capacity`; offsetting by the header
+            // size stays within bounds and points at the data section.
             self.region.as_ptr().add(HEADER_SIZE)
         };
         unsafe {
-            // SAFETY: Range is fully within the allocation created above.
+            // SAFETY: We borrow the data section immutably for the lifetime of `&self`, so no
+            // mutable aliases can exist simultaneously.
             std::slice::from_raw_parts(ptr, self.capacity_bytes())
         }
     }
 
     fn data_slice_mut(&mut self) -> &mut [u8] {
         let ptr = unsafe {
-            // SAFETY: `SharedRegion` exposes a unique mutable pointer for the live allocation.
+            // SAFETY: Allocation is header + data; the offset respects bounds and alignment, and
+            // `&mut self` guarantees exclusive access.
             self.region.as_mut_ptr().add(HEADER_SIZE)
         };
         unsafe {
-            // SAFETY: No aliasing occurs because `MsgRing` upholds the single-producer,
-            // single-consumer discipline; the slice covers the data section only.
+            // SAFETY: The resulting slice spans only the data portion; the SPSC contract prevents
+            // any concurrent `&mut` aliases.
             std::slice::from_raw_parts_mut(ptr, self.capacity_bytes())
         }
     }
@@ -396,15 +404,19 @@ impl MsgRing {
     }
 
     fn load_head_relaxed(&self) -> usize {
-        self.header().head_bytes.load(Ordering::Relaxed) as usize
+        unsafe { (*self.header_ptr()).head_bytes.load(Ordering::Relaxed) as usize }
     }
 
     fn load_tail_acquire(&self) -> usize {
-        self.header().tail_bytes.load(Ordering::Acquire) as usize
+        unsafe { (*self.header_ptr()).tail_bytes.load(Ordering::Acquire) as usize }
     }
 
     fn store_head_release(&self, value: u32) {
-        self.header().head_bytes.store(value, Ordering::Release);
+        unsafe {
+            (*self.header_ptr())
+                .head_bytes
+                .store(value, Ordering::Release)
+        };
     }
 
     fn reserve_offset(

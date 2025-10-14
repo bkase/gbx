@@ -5,7 +5,7 @@
 //! consumer (SPSC) index rings. One ring tracks free slots, the other advertises
 //! ready work. This module provides a safe façade over that layout.
 
-use crate::region::{RegionInit, SharedRegion};
+use crate::region::{SharedRegion, Uninit, Zeroed};
 use crate::{TransportError, TransportResult};
 #[cfg(feature = "loom")]
 use loom::sync::atomic::{AtomicU32, Ordering};
@@ -80,17 +80,16 @@ pub enum SlotPop {
 }
 
 struct IndexRing {
-    region: SharedRegion,
+    region: SharedRegion<Zeroed>,
 }
 
 impl IndexRing {
     fn new(capacity: u32, magic: u64) -> TransportResult<Self> {
         let header_size = mem::size_of::<IndexRingHeader>();
         let entries_len = mem::size_of::<u32>() * capacity as usize;
-        let mut region = SharedRegion::new_aligned(
+        let mut region = SharedRegion::<Zeroed>::new_aligned_zeroed(
             header_size + entries_len,
             mem::align_of::<IndexRingHeader>(),
-            RegionInit::Zeroed,
         )?;
         *region.prefix_mut::<IndexRingHeader>() = IndexRingHeader::new(capacity, magic);
         Ok(Self { region })
@@ -182,7 +181,7 @@ impl IndexRing {
 
 /// Fixed-size slot pool with shared rings for free and ready indices.
 pub struct SlotPool {
-    slots: SharedRegion,
+    slots: SharedRegion<Uninit>,
     free_ring: IndexRing,
     ready_ring: IndexRing,
     slot_size: usize,
@@ -211,11 +210,8 @@ impl SlotPool {
                     minimum: SLOT_ALIGNMENT,
                 })?;
 
-        let slots = SharedRegion::new_aligned(
-            slots_len,
-            SLOT_ALIGNMENT.max(4096),
-            RegionInit::Uninitialized,
-        )?;
+        let slots =
+            SharedRegion::<Uninit>::new_aligned_uninit(slots_len, SLOT_ALIGNMENT.max(4096))?;
         let mut free_ring = IndexRing::new(slot_count, FREE_RING_MAGIC)?;
         let ready_ring = IndexRing::new(slot_count, READY_RING_MAGIC)?;
 
