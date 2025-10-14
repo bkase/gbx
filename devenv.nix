@@ -29,7 +29,7 @@ in {
   tasks."format:workspace".exec = "cargo fmt --all";
   tasks."format:check".exec = "cargo fmt --all -- --check";
   tasks."lint:workspace".exec =
-    "cargo clippy --all-targets --all-features -- -D warnings";
+    "cargo clippy --all-targets --all-features -- -D warnings -D clippy::undocumented_unsafe_blocks";
   tasks."build:workspace".exec = "cargo build --all-targets";
   tasks."build:wasm".exec =
     "cargo build --target wasm32-unknown-unknown -p app";

@@ -101,6 +101,8 @@ fn heap_backing(len: usize, alignment: usize, init: InitKind) -> TransportResult
             alignment,
         })?;
 
+    // SAFETY: `alloc` and `alloc_zeroed` return either a valid pointer for `layout` or null on
+    // allocation failure; we check for null immediately afterwards.
     let ptr = unsafe {
         match init {
             InitKind::Zeroed => alloc_zeroed(layout),
@@ -136,10 +138,8 @@ fn mmap_backing(
     }
 
     if init.is_zeroed() {
-        unsafe {
-            // SAFETY: the anonymous mapping exposes `len` bytes that can be zeroed here.
-            ptr::write_bytes(ptr, 0, len)
-        };
+        // SAFETY: the anonymous mapping exposes `len` bytes that can be zeroed here.
+        unsafe { ptr::write_bytes(ptr, 0, len) };
     }
 
     Ok(Some(Backing::Native(map)))
@@ -156,8 +156,8 @@ impl<State> SharedRegion<State> {
     }
 
     fn into_state<Next>(self) -> SharedRegion<Next> {
-        // SAFETY: `SharedRegion<State>` and `SharedRegion<Next>` share identical layout and
-        // drop semantics because the marker type does not affect stored data.
+        // SAFETY: `SharedRegion<State>` and `SharedRegion<Next>` share identical layout and drop
+        // semantics because the marker type does not affect stored data.
         unsafe { mem::transmute(self) }
     }
 
@@ -188,11 +188,9 @@ impl<State> SharedRegion<State> {
 
     /// View the full region as a mutable slice.
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe {
-            // SAFETY: `SharedRegion` owns an allocation of `len` bytes, so the derived pointer is
-            // in-bounds and uniquely borrowed for the lifetime of `&mut self`.
-            std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len)
-        }
+        // SAFETY: `SharedRegion` owns an allocation of `len` bytes, so the derived pointer is
+        // in-bounds and uniquely borrowed for the lifetime of `&mut self`.
+        unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
     }
 
     fn assert_view_bounds<T>(&self, offset_bytes: usize, len: usize) {
@@ -229,10 +227,8 @@ impl SharedRegion<Zeroed> {
 
     /// View the full region as an immutable slice.
     pub fn as_slice(&self) -> &[u8] {
-        unsafe {
-            // SAFETY: The region owns `len` initialised bytes and exposes them immutably.
-            std::slice::from_raw_parts(self.as_ptr(), self.len)
-        }
+        // SAFETY: The region owns `len` initialised bytes and exposes them immutably.
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len) }
     }
 
     /// Reinterpret the prefix of the region as a reference to `T`.
@@ -245,11 +241,9 @@ impl SharedRegion<Zeroed> {
             "header types must be plain-old-data without drop glue"
         );
         self.assert_view_bounds::<T>(0, 1);
-        unsafe {
-            // SAFETY: Bounds and alignment checked above; caller guarantees the bytes are
-            // initialised and represent a `T` value.
-            &*(self.as_ptr() as *const T)
-        }
+        // SAFETY: Bounds and alignment checked above; caller guarantees the bytes are initialised
+        // and represent a `T` value.
+        unsafe { &*(self.as_ptr() as *const T) }
     }
 
     /// Reinterpret the prefix of the region as a mutable reference to `T`.
@@ -262,41 +256,31 @@ impl SharedRegion<Zeroed> {
             "header types must be plain-old-data without drop glue"
         );
         self.assert_view_bounds::<T>(0, 1);
-        unsafe {
-            // SAFETY: Bounds and alignment checked above; the mutable borrow ensures exclusive
-            // access so callers can initialise the bytes as a `T`.
-            &mut *(self.as_mut_ptr() as *mut T)
-        }
+        // SAFETY: Bounds and alignment checked above; the mutable borrow ensures exclusive access so
+        // callers can initialise the bytes as a `T`.
+        unsafe { &mut *(self.as_mut_ptr() as *mut T) }
     }
 
     /// Returns a typed slice view into the region starting at `offset_bytes`.
     pub(crate) fn slice<T>(&self, offset_bytes: usize, len: usize) -> &[T] {
         self.assert_view_bounds::<T>(offset_bytes, len);
-        let ptr = unsafe {
-            // SAFETY: `assert_view_bounds` guarantees `offset_bytes + len * size_of::<T>()` lies
-            // within the allocation and that the resulting pointer satisfies alignment.
-            self.as_ptr().add(offset_bytes)
-        } as *const T;
-        unsafe {
-            // SAFETY: Pointer and length are validated above; initialisation is the caller's
-            // responsibility where applicable.
-            std::slice::from_raw_parts(ptr, len)
-        }
+        // SAFETY: `assert_view_bounds` guarantees `offset_bytes + len * size_of::<T>()` lies within
+        // the allocation and that the resulting pointer satisfies alignment.
+        let ptr = unsafe { self.as_ptr().add(offset_bytes) } as *const T;
+        // SAFETY: Pointer and length are validated above; initialisation is the caller's
+        // responsibility where applicable.
+        unsafe { std::slice::from_raw_parts(ptr, len) }
     }
 
     /// Returns a mutable typed slice view into the region starting at `offset_bytes`.
     pub(crate) fn slice_mut<T>(&mut self, offset_bytes: usize, len: usize) -> &mut [T] {
         self.assert_view_bounds::<T>(offset_bytes, len);
-        let ptr = unsafe {
-            // SAFETY: `assert_view_bounds` establishes the offset fits in the allocation and obeys
-            // alignment; the mutable borrow ensures unique access for the produced slice.
-            self.as_mut_ptr().add(offset_bytes)
-        } as *mut T;
-        unsafe {
-            // SAFETY: Pointer and length have been checked above; caller initialises the region
-            // before reading from it.
-            std::slice::from_raw_parts_mut(ptr, len)
-        }
+        // SAFETY: `assert_view_bounds` establishes the offset fits in the allocation and obeys
+        // alignment; the mutable borrow ensures unique access for the produced slice.
+        let ptr = unsafe { self.as_mut_ptr().add(offset_bytes) } as *mut T;
+        // SAFETY: Pointer and length have been checked above; caller initialises the region before
+        // reading from it.
+        unsafe { std::slice::from_raw_parts_mut(ptr, len) }
     }
 }
 
@@ -316,6 +300,8 @@ impl SharedRegion<Uninit> {
 impl<State> Drop for SharedRegion<State> {
     fn drop(&mut self) {
         if let Backing::Owned { ptr, layout } = &self.backing {
+            // SAFETY: `ptr`/`layout` originate from `alloc` in `heap_backing`; they stay valid until
+            // this drop runs, so deallocating here releases the allocation once.
             unsafe {
                 dealloc(ptr.as_ptr(), *layout);
             }

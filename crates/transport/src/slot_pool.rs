@@ -453,7 +453,11 @@ mod loom_tests {
 
     struct SharedSlotPool(UnsafeCell<SlotPool>);
 
+    // SAFETY: `SharedSlotPool` only exposes mutable access via `with_mut`, which serialises callers
+    // in the Loom model; the inner `SlotPool` does not share references across threads otherwise.
     unsafe impl Send for SharedSlotPool {}
+    // SAFETY: Same reasoning as `Send`; all access routes through `with_mut`, so simultaneous
+    // mutable borrows cannot occur.
     unsafe impl Sync for SharedSlotPool {}
 
     impl SharedSlotPool {
@@ -467,6 +471,8 @@ mod loom_tests {
         }
 
         fn with_mut<R>(&self, f: impl FnOnce(&mut SlotPool) -> R) -> R {
+            // SAFETY: `UnsafeCell` provides interior mutability and this helper serialises callers,
+            // so we hand out a unique `&mut SlotPool` to the closure.
             unsafe { f(&mut *self.0.get()) }
         }
     }
