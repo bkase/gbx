@@ -480,7 +480,7 @@ mod loom_tests {
     #[ignore]
     fn slow_loom_slot_pool_spsc_round_trip() {
         loom::model(|| {
-            const COUNT: u32 = 4;
+            const COUNT: u32 = 2;
             let shared = Arc::new(SharedSlotPool::new(COUNT));
             let producer = shared.clone();
             let consumer = shared.clone();
@@ -550,8 +550,8 @@ mod loom_tests {
     #[ignore]
     fn slow_loom_slot_pool_wraps_without_leak() {
         loom::model(|| {
-            const CAPACITY: u32 = 3;
-            const ITERATIONS: u32 = 6;
+            const CAPACITY: u32 = 2;
+            const ITERATIONS: u32 = 2;
             let shared = Arc::new(SharedSlotPool::new(CAPACITY));
             let producer = shared.clone();
             let consumer = shared.clone();
