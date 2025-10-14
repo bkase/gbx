@@ -455,102 +455,23 @@ mod loom_tests {
 
     const SLOT_SIZE_BYTES: usize = SLOT_ALIGNMENT * 2;
 
-    struct LoomSlotPool {
-        inner: Arc<UnsafeCell<SlotPool>>,
-    }
+    struct SharedSlotPool(UnsafeCell<SlotPool>);
 
-    unsafe impl Send for LoomSlotPool {}
-    unsafe impl Sync for LoomSlotPool {}
+    unsafe impl Send for SharedSlotPool {}
+    unsafe impl Sync for SharedSlotPool {}
 
-    impl LoomSlotPool {
+    impl SharedSlotPool {
         fn new(slot_count: u32) -> Self {
             let pool = SlotPool::new(SlotPoolConfig {
                 slot_count,
                 slot_size: SLOT_SIZE_BYTES,
             })
             .expect("create slot pool");
-            Self {
-                inner: Arc::new(UnsafeCell::new(pool)),
-            }
+            Self(UnsafeCell::new(pool))
         }
 
-        fn producer(&self) -> LoomProducer {
-            LoomProducer {
-                inner: self.inner.clone(),
-            }
-        }
-
-        fn consumer(&self) -> LoomConsumer {
-            LoomConsumer {
-                inner: self.inner.clone(),
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    struct LoomProducer {
-        inner: Arc<UnsafeCell<SlotPool>>,
-    }
-
-    impl LoomProducer {
-        fn try_produce(&self, fill_byte: u8) -> Option<u32> {
-            unsafe {
-                let pool = &mut *self.inner.get();
-                let idx = pool.try_acquire_free()?;
-                {
-                    let slot = pool.slot_mut(idx);
-                    slot.fill(fill_byte);
-                }
-                match pool.push_ready(idx) {
-                    SlotPush::Ok => Some(idx),
-                    SlotPush::WouldBlock => {
-                        pool.release_free(idx);
-                        None
-                    }
-                }
-            }
-        }
-
-        fn produce(&self, fill_byte: u8) -> u32 {
-            loop {
-                if let Some(idx) = self.try_produce(fill_byte) {
-                    return idx;
-                }
-                thread::yield_now();
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    struct LoomConsumer {
-        inner: Arc<UnsafeCell<SlotPool>>,
-    }
-
-    impl LoomConsumer {
-        fn try_consume(&self) -> Option<(u32, u8)> {
-            unsafe {
-                let pool = &mut *self.inner.get();
-                match pool.pop_ready() {
-                    SlotPop::Ok { slot_idx } => {
-                        let first_byte = {
-                            let slot = pool.slot_mut(slot_idx);
-                            slot[0]
-                        };
-                        pool.release_free(slot_idx);
-                        Some((slot_idx, first_byte))
-                    }
-                    SlotPop::Empty => None,
-                }
-            }
-        }
-
-        fn consume(&self) -> (u32, u8) {
-            loop {
-                if let Some(result) = self.try_consume() {
-                    return result;
-                }
-                thread::yield_now();
-            }
+        fn with_mut<R>(&self, f: impl FnOnce(&mut SlotPool) -> R) -> R {
+            unsafe { f(&mut *self.0.get()) }
         }
     }
 
@@ -560,20 +481,60 @@ mod loom_tests {
     fn slow_loom_slot_pool_spsc_round_trip() {
         loom::model(|| {
             const COUNT: u32 = 4;
-            let pool = LoomSlotPool::new(COUNT);
-            let producer = pool.producer();
-            let consumer = pool.consumer();
+            let shared = Arc::new(SharedSlotPool::new(COUNT));
+            let producer = shared.clone();
+            let consumer = shared.clone();
 
             let producer_thread = thread::spawn(move || {
                 for idx in 0..COUNT {
-                    let produced = producer.produce(idx as u8);
-                    assert_eq!(produced, idx);
+                    loop {
+                        let produced = producer.with_mut(|pool| {
+                            let slot_idx = pool.try_acquire_free()?;
+
+                            {
+                                let slot = pool.slot_mut(slot_idx);
+                                slot.fill(idx as u8);
+                            }
+
+                            match pool.push_ready(slot_idx) {
+                                SlotPush::Ok => Some(slot_idx),
+                                SlotPush::WouldBlock => {
+                                    pool.release_free(slot_idx);
+                                    None
+                                }
+                            }
+                        });
+
+                        if let Some(slot_idx) = produced {
+                            assert_eq!(slot_idx, idx);
+                            break;
+                        }
+                        thread::yield_now();
+                    }
                 }
             });
 
             let consumer_thread = thread::spawn(move || {
                 for expected in 0..COUNT {
-                    let (observed_idx, value) = consumer.consume();
+                    let (observed_idx, value) = loop {
+                        let result = consumer.with_mut(|pool| match pool.pop_ready() {
+                            SlotPop::Ok { slot_idx } => {
+                                let first_byte = {
+                                    let slot = pool.slot_mut(slot_idx);
+                                    slot[0]
+                                };
+                                pool.release_free(slot_idx);
+                                Some((slot_idx, first_byte))
+                            }
+                            SlotPop::Empty => None,
+                        });
+
+                        if let Some(pair) = result {
+                            break pair;
+                        }
+                        thread::yield_now();
+                    };
+
                     assert_eq!(observed_idx, expected);
                     assert_eq!(value, expected as u8);
                 }
@@ -591,21 +552,58 @@ mod loom_tests {
         loom::model(|| {
             const CAPACITY: u32 = 3;
             const ITERATIONS: u32 = 6;
-            let pool = LoomSlotPool::new(CAPACITY);
-            let producer = pool.producer();
-            let consumer = pool.consumer();
+            let shared = Arc::new(SharedSlotPool::new(CAPACITY));
+            let producer = shared.clone();
+            let consumer = shared.clone();
 
             let producer_thread = thread::spawn(move || {
                 for turn in 0..ITERATIONS {
                     let fill = (turn % CAPACITY) as u8;
-                    producer.produce(fill);
+                    loop {
+                        let produced = producer.with_mut(|pool| {
+                            let slot_idx = pool.try_acquire_free()?;
+                            {
+                                let slot = pool.slot_mut(slot_idx);
+                                slot.fill(fill);
+                            }
+                            match pool.push_ready(slot_idx) {
+                                SlotPush::Ok => Some(slot_idx),
+                                SlotPush::WouldBlock => {
+                                    pool.release_free(slot_idx);
+                                    None
+                                }
+                            }
+                        });
+
+                        if produced.is_some() {
+                            break;
+                        }
+                        thread::yield_now();
+                    }
                 }
             });
 
             let consumer_thread = thread::spawn(move || {
                 for turn in 0..ITERATIONS {
                     let expected = (turn % CAPACITY) as u8;
-                    let (_idx, value) = consumer.consume();
+                    let value = loop {
+                        let result = consumer.with_mut(|pool| match pool.pop_ready() {
+                            SlotPop::Ok { slot_idx } => {
+                                let byte = {
+                                    let slot = pool.slot_mut(slot_idx);
+                                    slot[0]
+                                };
+                                pool.release_free(slot_idx);
+                                Some(byte)
+                            }
+                            SlotPop::Empty => None,
+                        });
+
+                        if let Some(byte) = result {
+                            break byte;
+                        }
+                        thread::yield_now();
+                    };
                     assert_eq!(value, expected);
                 }
             });
