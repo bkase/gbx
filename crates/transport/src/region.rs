@@ -212,7 +212,7 @@ impl<State> SharedRegion<State> {
         let base = self.as_ptr() as usize + offset_bytes;
         let align = mem::align_of::<T>();
         assert!(
-            base % align == 0,
+            base.is_multiple_of(align),
             "region offset {offset_bytes} misaligned for type with alignment {align}"
         );
     }
