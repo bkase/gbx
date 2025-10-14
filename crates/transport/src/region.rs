@@ -7,6 +7,7 @@
 
 use crate::{TransportError, TransportResult};
 use std::alloc::{alloc, alloc_zeroed, dealloc, Layout};
+use std::mem;
 use std::ptr::{self, NonNull};
 
 /// Specifies how memory in a [`SharedRegion`] should be initialised.
@@ -177,6 +178,56 @@ impl SharedRegion {
     /// View the full region as a mutable slice.
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
+    }
+
+    /// Reinterpret the prefix of the region as a reference to `T`.
+    pub(crate) fn prefix<T>(&self) -> &T {
+        self.assert_view_bounds::<T>(0, 1);
+        unsafe { &*(self.as_ptr() as *const T) }
+    }
+
+    /// Reinterpret the prefix of the region as a mutable reference to `T`.
+    pub(crate) fn prefix_mut<T>(&mut self) -> &mut T {
+        self.assert_view_bounds::<T>(0, 1);
+        unsafe { &mut *(self.as_mut_ptr() as *mut T) }
+    }
+
+    /// Returns a typed slice view into the region starting at `offset_bytes`.
+    pub(crate) fn slice<T>(&self, offset_bytes: usize, len: usize) -> &[T] {
+        self.assert_view_bounds::<T>(offset_bytes, len);
+        let ptr = unsafe { self.as_ptr().add(offset_bytes) } as *const T;
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    }
+
+    /// Returns a mutable typed slice view into the region starting at `offset_bytes`.
+    pub(crate) fn slice_mut<T>(&mut self, offset_bytes: usize, len: usize) -> &mut [T] {
+        self.assert_view_bounds::<T>(offset_bytes, len);
+        let ptr = unsafe { self.as_mut_ptr().add(offset_bytes) } as *mut T;
+        unsafe { std::slice::from_raw_parts_mut(ptr, len) }
+    }
+
+    fn assert_view_bounds<T>(&self, offset_bytes: usize, len: usize) {
+        let elem_size = mem::size_of::<T>();
+        if elem_size == 0 {
+            return;
+        }
+        let span_bytes = len.checked_mul(elem_size).expect("slice length overflow");
+        let end = offset_bytes
+            .checked_add(span_bytes)
+            .expect("slice bounds overflow");
+        assert!(
+            end <= self.len,
+            "slice of {} bytes exceeds region length {}",
+            end,
+            self.len
+        );
+
+        let base = self.as_ptr() as usize + offset_bytes;
+        let align = mem::align_of::<T>();
+        assert!(
+            base % align == 0,
+            "region offset {offset_bytes} misaligned for type with alignment {align}"
+        );
     }
 }
 

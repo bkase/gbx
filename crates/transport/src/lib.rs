@@ -9,7 +9,9 @@
 mod error;
 mod msg_ring;
 mod region;
+mod slot_pool;
 
 pub use error::{TransportError, TransportResult};
 pub use msg_ring::{Envelope, MsgRing, ProducerGrant, Record};
 pub use region::{RegionInit, SharedRegion};
+pub use slot_pool::{SlotPool, SlotPoolConfig, SlotPop, SlotPush, SLOT_ALIGNMENT};

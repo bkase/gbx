@@ -18,8 +18,11 @@
 
 use crate::region::{RegionInit, SharedRegion};
 use crate::{TransportError, TransportResult};
+#[cfg(feature = "loom")]
+use loom::sync::atomic::{AtomicU32, Ordering};
 use std::cell::Cell;
 use std::mem::size_of;
+#[cfg(not(feature = "loom"))]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 const ALIGN: usize = 8;
@@ -731,5 +734,154 @@ mod tests {
         } else {
             false
         }
+    }
+}
+
+#[cfg(all(test, feature = "loom"))]
+mod loom_tests {
+    use super::*;
+    use loom::sync::Arc;
+    use loom::thread;
+    use std::cell::UnsafeCell;
+
+    struct LoomMsgRing {
+        inner: Arc<UnsafeCell<MsgRing>>,
+    }
+
+    unsafe impl Send for LoomMsgRing {}
+    unsafe impl Sync for LoomMsgRing {}
+
+    impl LoomMsgRing {
+        fn new(capacity: usize) -> Self {
+            let ring = MsgRing::new(capacity, Envelope::new(0xAB, 1)).expect("create msg ring");
+            Self {
+                inner: Arc::new(UnsafeCell::new(ring)),
+            }
+        }
+
+        fn producer(&self) -> LoomProducer {
+            LoomProducer {
+                inner: self.inner.clone(),
+            }
+        }
+
+        fn consumer(&self) -> LoomConsumer {
+            LoomConsumer {
+                inner: self.inner.clone(),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct LoomProducer {
+        inner: Arc<UnsafeCell<MsgRing>>,
+    }
+
+    impl LoomProducer {
+        fn send_bytes(&self, payload: &[u8]) {
+            loop {
+                if self.try_send(payload) {
+                    break;
+                }
+                thread::yield_now();
+            }
+        }
+
+        fn try_send(&self, payload: &[u8]) -> bool {
+            unsafe {
+                let ring = &mut *self.inner.get();
+                if let Some(mut grant) = ring.try_reserve(payload.len()) {
+                    let slot = grant.payload();
+                    slot[..payload.len()].copy_from_slice(payload);
+                    grant.commit(payload.len());
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct LoomConsumer {
+        inner: Arc<UnsafeCell<MsgRing>>,
+    }
+
+    impl LoomConsumer {
+        fn recv_bytes(&self) -> Vec<u8> {
+            loop {
+                if let Some(bytes) = self.try_recv() {
+                    return bytes;
+                }
+                thread::yield_now();
+            }
+        }
+
+        fn try_recv(&self) -> Option<Vec<u8>> {
+            unsafe {
+                let ring = &mut *self.inner.get();
+                if let Some(record) = ring.consumer_peek() {
+                    let payload = record.payload.to_vec();
+                    ring.consumer_pop_advance();
+                    Some(payload)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn slow_loom_msg_ring_small_records() {
+        loom::model(|| {
+            let ring = LoomMsgRing::new(128);
+            let producer = ring.producer();
+            let consumer = ring.consumer();
+
+            let producer_thread = thread::spawn(move || {
+                for byte in 0u8..3 {
+                    producer.send_bytes(&[byte]);
+                }
+            });
+
+            let consumer_thread = thread::spawn(move || {
+                for expected in 0u8..3 {
+                    let payload = consumer.recv_bytes();
+                    assert_eq!(payload, vec![expected]);
+                }
+            });
+
+            producer_thread.join().unwrap();
+            consumer_thread.join().unwrap();
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn slow_loom_msg_ring_wrap_pad_sequence() {
+        loom::model(|| {
+            let ring = LoomMsgRing::new(64);
+            let producer = ring.producer();
+            let consumer = ring.consumer();
+
+            let producer_thread = thread::spawn(move || {
+                for chunk in [16usize, 20, 12] {
+                    let payload = vec![chunk as u8; chunk];
+                    producer.send_bytes(&payload);
+                }
+            });
+
+            let consumer_thread = thread::spawn(move || {
+                for chunk in [16usize, 20, 12] {
+                    let payload = consumer.recv_bytes();
+                    assert_eq!(payload.len(), chunk);
+                    assert!(payload.iter().all(|b| *b == chunk as u8));
+                }
+            });
+
+            producer_thread.join().unwrap();
+            consumer_thread.join().unwrap();
+        });
     }
 }

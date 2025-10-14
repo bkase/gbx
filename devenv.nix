@@ -38,7 +38,7 @@ in {
   # Tight test discipline tasks (stable API for CI)
   tasks."test:fast".exec = "cargo nextest run --profile fast";
   tasks."test:slow".exec =
-    "cargo nextest run --profile slow --run-ignored ignored-only";
+    "cargo nextest run --profile slow --run-ignored ignored-only --features loom";
   tasks."test:wasm-smoke".exec =
     "wasm-pack test --headless --chrome --chromedriver=$(which chromedriver) crates/tests";
 
