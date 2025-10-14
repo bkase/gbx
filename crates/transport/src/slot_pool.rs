@@ -87,8 +87,11 @@ impl IndexRing {
     fn new(capacity: u32, magic: u64) -> TransportResult<Self> {
         let header_size = mem::size_of::<IndexRingHeader>();
         let entries_len = mem::size_of::<u32>() * capacity as usize;
-        let mut region =
-            SharedRegion::new_aligned(header_size + entries_len, header_size, RegionInit::Zeroed)?;
+        let mut region = SharedRegion::new_aligned(
+            header_size + entries_len,
+            mem::align_of::<IndexRingHeader>(),
+            RegionInit::Zeroed,
+        )?;
         *region.prefix_mut::<IndexRingHeader>() = IndexRingHeader::new(capacity, magic);
         Ok(Self { region })
     }
@@ -303,7 +306,7 @@ fn validate_config(config: &SlotPoolConfig) -> TransportResult<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "loom")))]
 mod tests {
     use super::*;
     use std::collections::VecDeque;
@@ -330,6 +333,7 @@ mod tests {
         slots
     }
 
+    /// Exercises acquire → ready → release across the entire pool once.
     #[test]
     fn lifecycle_roundtrip() {
         let mut pool = pool(SLOT_COUNT);
@@ -382,6 +386,7 @@ mod tests {
         }
     }
 
+    /// Ensures each slot exposes the configured length and alignment.
     #[test]
     fn slot_alignment_and_length() {
         let mut pool = pool(SLOT_COUNT);
@@ -395,6 +400,7 @@ mod tests {
         pool.release_free(idx);
     }
 
+    /// Verifies the ready ring preserves FIFO order for SPSC traffic.
     #[test]
     fn ready_ring_fifo() {
         let mut pool = pool(SLOT_COUNT);
@@ -414,6 +420,7 @@ mod tests {
         assert!(matches!(pool.pop_ready(), SlotPop::Empty));
     }
 
+    /// Stresses repeated acquire/push/pop/release cycles to catch leaks.
     #[test]
     fn churn_does_not_leak_slots() {
         let mut pool = pool(SLOT_COUNT);
@@ -444,145 +451,167 @@ mod loom_tests {
     use super::*;
     use loom::sync::Arc;
     use loom::thread;
+    use std::cell::UnsafeCell;
 
-    #[derive(Debug)]
-    struct LoomIndexRing {
-        capacity: u32,
-        head: AtomicU32,
-        tail: AtomicU32,
-        entries: Vec<AtomicU32>,
+    const SLOT_SIZE_BYTES: usize = SLOT_ALIGNMENT * 2;
+
+    struct LoomSlotPool {
+        inner: Arc<UnsafeCell<SlotPool>>,
     }
 
-    impl LoomIndexRing {
-        fn new(capacity: u32) -> Self {
-            let entries = (0..capacity).map(|_| AtomicU32::new(0)).collect::<Vec<_>>();
+    unsafe impl Send for LoomSlotPool {}
+    unsafe impl Sync for LoomSlotPool {}
+
+    impl LoomSlotPool {
+        fn new(slot_count: u32) -> Self {
+            let pool = SlotPool::new(SlotPoolConfig {
+                slot_count,
+                slot_size: SLOT_SIZE_BYTES,
+            })
+            .expect("create slot pool");
             Self {
-                capacity,
-                head: AtomicU32::new(0),
-                tail: AtomicU32::new(0),
-                entries,
+                inner: Arc::new(UnsafeCell::new(pool)),
             }
         }
 
-        fn push(&self, value: u32) -> Result<(), ()> {
-            let capacity = self.capacity;
-            let head = self.head.load(Ordering::Relaxed);
-            let tail = self.tail.load(Ordering::Acquire);
-            if head.wrapping_sub(tail) >= capacity {
-                return Err(());
+        fn producer(&self) -> LoomProducer {
+            LoomProducer {
+                inner: self.inner.clone(),
             }
-            let index = (head % capacity) as usize;
-            self.entries[index].store(value, Ordering::Relaxed);
-            self.head.store(head.wrapping_add(1), Ordering::Release);
-            Ok(())
         }
 
-        fn pop(&self) -> Option<u32> {
-            let head = self.head.load(Ordering::Acquire);
-            let tail = self.tail.load(Ordering::Relaxed);
-            if tail == head {
-                return None;
+        fn consumer(&self) -> LoomConsumer {
+            LoomConsumer {
+                inner: self.inner.clone(),
             }
-            let capacity = self.capacity;
-            let index = (tail % capacity) as usize;
-            let value = self.entries[index].load(Ordering::Relaxed);
-            self.tail.store(tail.wrapping_add(1), Ordering::Release);
-            Some(value)
-        }
-
-        fn reset_empty(&self) {
-            self.head.store(0, Ordering::Relaxed);
-            self.tail.store(0, Ordering::Relaxed);
         }
     }
 
+    #[derive(Clone)]
+    struct LoomProducer {
+        inner: Arc<UnsafeCell<SlotPool>>,
+    }
+
+    impl LoomProducer {
+        fn try_produce(&self, fill_byte: u8) -> Option<u32> {
+            unsafe {
+                let pool = &mut *self.inner.get();
+                let idx = pool.try_acquire_free()?;
+                {
+                    let slot = pool.slot_mut(idx);
+                    slot.fill(fill_byte);
+                }
+                match pool.push_ready(idx) {
+                    SlotPush::Ok => Some(idx),
+                    SlotPush::WouldBlock => {
+                        pool.release_free(idx);
+                        None
+                    }
+                }
+            }
+        }
+
+        fn produce(&self, fill_byte: u8) -> u32 {
+            loop {
+                if let Some(idx) = self.try_produce(fill_byte) {
+                    return idx;
+                }
+                thread::yield_now();
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct LoomConsumer {
+        inner: Arc<UnsafeCell<SlotPool>>,
+    }
+
+    impl LoomConsumer {
+        fn try_consume(&self) -> Option<(u32, u8)> {
+            unsafe {
+                let pool = &mut *self.inner.get();
+                match pool.pop_ready() {
+                    SlotPop::Ok { slot_idx } => {
+                        let first_byte = {
+                            let slot = pool.slot_mut(slot_idx);
+                            slot[0]
+                        };
+                        pool.release_free(slot_idx);
+                        Some((slot_idx, first_byte))
+                    }
+                    SlotPop::Empty => None,
+                }
+            }
+        }
+
+        fn consume(&self) -> (u32, u8) {
+            loop {
+                if let Some(result) = self.try_consume() {
+                    return result;
+                }
+                thread::yield_now();
+            }
+        }
+    }
+
+    /// Loom: verifies SPSC acquire/ready/consume cycles preserve order and reuse.
     #[test]
     #[ignore]
-    fn slow_loom_index_ring_spsc_round_trip() {
+    fn slow_loom_slot_pool_spsc_round_trip() {
         loom::model(|| {
             const COUNT: u32 = 4;
-            let ring = Arc::new(LoomIndexRing::new(COUNT));
-            ring.reset_empty();
-
-            let producer = ring.clone();
-            let consumer = ring.clone();
+            let pool = LoomSlotPool::new(COUNT);
+            let producer = pool.producer();
+            let consumer = pool.consumer();
 
             let producer_thread = thread::spawn(move || {
                 for idx in 0..COUNT {
-                    loop {
-                        if producer.push(idx).is_ok() {
-                            break;
-                        }
-                        thread::yield_now();
-                    }
+                    let produced = producer.produce(idx as u8);
+                    assert_eq!(produced, idx);
                 }
             });
 
             let consumer_thread = thread::spawn(move || {
                 for expected in 0..COUNT {
-                    let slot = loop {
-                        if let Some(value) = consumer.pop() {
-                            break value;
-                        }
-                        thread::yield_now();
-                    };
-                    assert_eq!(slot, expected);
+                    let (observed_idx, value) = consumer.consume();
+                    assert_eq!(observed_idx, expected);
+                    assert_eq!(value, expected as u8);
                 }
             });
 
             producer_thread.join().unwrap();
             consumer_thread.join().unwrap();
-            let head = ring.head.load(Ordering::Acquire);
-            let tail = ring.tail.load(Ordering::Acquire);
-            assert_eq!(head, tail, "ring must be empty at end");
         });
     }
 
+    /// Loom: stresses wrap-around reuse after repeated production and consumption cycles.
     #[test]
     #[ignore]
-    fn slow_loom_index_ring_wraps_without_leak() {
+    fn slow_loom_slot_pool_wraps_without_leak() {
         loom::model(|| {
             const CAPACITY: u32 = 3;
-            const ITERATIONS: u32 = 3;
-            let ring = Arc::new(LoomIndexRing::new(CAPACITY));
-            ring.reset_empty();
-
-            let producer = ring.clone();
-            let consumer = ring.clone();
+            const ITERATIONS: u32 = 6;
+            let pool = LoomSlotPool::new(CAPACITY);
+            let producer = pool.producer();
+            let consumer = pool.consumer();
 
             let producer_thread = thread::spawn(move || {
-                for idx in 0..ITERATIONS {
-                    let value = idx % CAPACITY;
-                    loop {
-                        if producer.push(value).is_ok() {
-                            break;
-                        }
-                        thread::yield_now();
-                    }
+                for turn in 0..ITERATIONS {
+                    let fill = (turn % CAPACITY) as u8;
+                    producer.produce(fill);
                 }
             });
 
             let consumer_thread = thread::spawn(move || {
-                for idx in 0..ITERATIONS {
-                    let expected = idx % CAPACITY;
-                    let value = loop {
-                        if let Some(val) = consumer.pop() {
-                            break val;
-                        }
-                        thread::yield_now();
-                    };
+                for turn in 0..ITERATIONS {
+                    let expected = (turn % CAPACITY) as u8;
+                    let (_idx, value) = consumer.consume();
                     assert_eq!(value, expected);
                 }
             });
 
             producer_thread.join().unwrap();
             consumer_thread.join().unwrap();
-            let head = ring.head.load(Ordering::Acquire);
-            let tail = ring.tail.load(Ordering::Acquire);
-            assert_eq!(
-                head, tail,
-                "ring returns to empty state after wraparound operations"
-            );
         });
     }
 }

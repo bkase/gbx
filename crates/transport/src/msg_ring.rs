@@ -498,7 +498,7 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + (align - 1)) & !(align - 1)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "loom")))]
 mod tests {
     //! Unit coverage for the single-producer/single-consumer ring.
     use super::*;
@@ -616,7 +616,7 @@ mod tests {
         }
     }
 
-    /// Stress test: randomised record sizes never violate FIFO order or lose data.
+    /// Randomised stress covering wrap-around, FIFO order, and data retention.
     #[test]
     fn var_len_stress() {
         let mut ring = ring(4096);
@@ -831,6 +831,7 @@ mod loom_tests {
         }
     }
 
+    /// Loom: ensures small fixed-size payloads stay consistent across interleavings.
     #[test]
     #[ignore]
     fn slow_loom_msg_ring_small_records() {
@@ -857,6 +858,7 @@ mod loom_tests {
         });
     }
 
+    /// Loom: exercises wrap sentinel logic under adversarial scheduling.
     #[test]
     #[ignore]
     fn slow_loom_msg_ring_wrap_pad_sequence() {
