@@ -10,7 +10,7 @@
 ## Build, Test, and Development Commands
 - `devenv shell` — enter the reproducible Rust toolchain environment (direnv auto-loads it when available).
 - `devenv tasks run format:workspace` — apply `rustfmt` across the workspace.
-- `devenv tasks run lint:workspace` — run `cargo clippy --all-targets --all-features -D warnings`.
+- `devenv tasks run lint:workspace` — run `cargo clippy --all-targets --all-features -D warnings -D clippy::undocumented_unsafe_blocks` (every `unsafe` block must carry a `// SAFETY:` comment explaining the invariants).
 - `devenv tasks run build:workspace` — compile all workspace crates for native targets.
 - `devenv tasks run test:workspace` — execute `cargo test` for every crate, including integration scenarios.
 - Add a `devenv` task for every new developer workflow before documenting raw commands elsewhere.
