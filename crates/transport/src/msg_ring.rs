@@ -744,90 +744,19 @@ mod loom_tests {
     use loom::thread;
     use std::cell::UnsafeCell;
 
-    struct LoomMsgRing {
-        inner: Arc<UnsafeCell<MsgRing>>,
-    }
+    struct SharedMsgRing(UnsafeCell<MsgRing>);
 
-    unsafe impl Send for LoomMsgRing {}
-    unsafe impl Sync for LoomMsgRing {}
+    unsafe impl Send for SharedMsgRing {}
+    unsafe impl Sync for SharedMsgRing {}
 
-    impl LoomMsgRing {
+    impl SharedMsgRing {
         fn new(capacity: usize) -> Self {
             let ring = MsgRing::new(capacity, Envelope::new(0xAB, 1)).expect("create msg ring");
-            Self {
-                inner: Arc::new(UnsafeCell::new(ring)),
-            }
+            Self(UnsafeCell::new(ring))
         }
 
-        fn producer(&self) -> LoomProducer {
-            LoomProducer {
-                inner: self.inner.clone(),
-            }
-        }
-
-        fn consumer(&self) -> LoomConsumer {
-            LoomConsumer {
-                inner: self.inner.clone(),
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    struct LoomProducer {
-        inner: Arc<UnsafeCell<MsgRing>>,
-    }
-
-    impl LoomProducer {
-        fn send_bytes(&self, payload: &[u8]) {
-            loop {
-                if self.try_send(payload) {
-                    break;
-                }
-                thread::yield_now();
-            }
-        }
-
-        fn try_send(&self, payload: &[u8]) -> bool {
-            unsafe {
-                let ring = &mut *self.inner.get();
-                if let Some(mut grant) = ring.try_reserve(payload.len()) {
-                    let slot = grant.payload();
-                    slot[..payload.len()].copy_from_slice(payload);
-                    grant.commit(payload.len());
-                    true
-                } else {
-                    false
-                }
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    struct LoomConsumer {
-        inner: Arc<UnsafeCell<MsgRing>>,
-    }
-
-    impl LoomConsumer {
-        fn recv_bytes(&self) -> Vec<u8> {
-            loop {
-                if let Some(bytes) = self.try_recv() {
-                    return bytes;
-                }
-                thread::yield_now();
-            }
-        }
-
-        fn try_recv(&self) -> Option<Vec<u8>> {
-            unsafe {
-                let ring = &mut *self.inner.get();
-                if let Some(record) = ring.consumer_peek() {
-                    let payload = record.payload.to_vec();
-                    ring.consumer_pop_advance();
-                    Some(payload)
-                } else {
-                    None
-                }
-            }
+        fn with_mut<R>(&self, f: impl FnOnce(&mut MsgRing) -> R) -> R {
+            unsafe { f(&mut *self.0.get()) }
         }
     }
 
@@ -836,19 +765,48 @@ mod loom_tests {
     #[ignore]
     fn slow_loom_msg_ring_small_records() {
         loom::model(|| {
-            let ring = LoomMsgRing::new(128);
-            let producer = ring.producer();
-            let consumer = ring.consumer();
+            let shared = Arc::new(SharedMsgRing::new(128));
+            let producer = shared.clone();
+            let consumer = shared.clone();
 
             let producer_thread = thread::spawn(move || {
                 for byte in 0u8..3 {
-                    producer.send_bytes(&[byte]);
+                    loop {
+                        let pushed = producer.with_mut(|ring| {
+                            if let Some(mut grant) = ring.try_reserve(1) {
+                                grant.payload()[0] = byte;
+                                grant.commit(1);
+                                true
+                            } else {
+                                false
+                            }
+                        });
+
+                        if pushed {
+                            break;
+                        }
+                        thread::yield_now();
+                    }
                 }
             });
 
             let consumer_thread = thread::spawn(move || {
                 for expected in 0u8..3 {
-                    let payload = consumer.recv_bytes();
+                    let payload = loop {
+                        let maybe = consumer.with_mut(|ring| {
+                            if let Some(record) = ring.consumer_peek() {
+                                let payload = record.payload.to_vec();
+                                ring.consumer_pop_advance();
+                                Some(payload)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(bytes) = maybe {
+                            break bytes;
+                        }
+                        thread::yield_now();
+                    };
                     assert_eq!(payload, vec![expected]);
                 }
             });
@@ -863,20 +821,48 @@ mod loom_tests {
     #[ignore]
     fn slow_loom_msg_ring_wrap_pad_sequence() {
         loom::model(|| {
-            let ring = LoomMsgRing::new(64);
-            let producer = ring.producer();
-            let consumer = ring.consumer();
+            let shared = Arc::new(SharedMsgRing::new(64));
+            let producer = shared.clone();
+            let consumer = shared.clone();
 
             let producer_thread = thread::spawn(move || {
                 for chunk in [16usize, 20, 12] {
                     let payload = vec![chunk as u8; chunk];
-                    producer.send_bytes(&payload);
+                    loop {
+                        let pushed = producer.with_mut(|ring| {
+                            if let Some(mut grant) = ring.try_reserve(payload.len()) {
+                                grant.payload()[..payload.len()].copy_from_slice(&payload);
+                                grant.commit(payload.len());
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                        if pushed {
+                            break;
+                        }
+                        thread::yield_now();
+                    }
                 }
             });
 
             let consumer_thread = thread::spawn(move || {
                 for chunk in [16usize, 20, 12] {
-                    let payload = consumer.recv_bytes();
+                    let payload = loop {
+                        let maybe = consumer.with_mut(|ring| {
+                            if let Some(record) = ring.consumer_peek() {
+                                let payload = record.payload.to_vec();
+                                ring.consumer_pop_advance();
+                                Some(payload)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(bytes) = maybe {
+                            break bytes;
+                        }
+                        thread::yield_now();
+                    };
                     assert_eq!(payload.len(), chunk);
                     assert!(payload.iter().all(|b| *b == chunk as u8));
                 }
