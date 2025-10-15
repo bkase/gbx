@@ -99,6 +99,14 @@ impl IndexRing {
         self.region.prefix::<IndexRingHeader>().capacity
     }
 
+    #[cfg(any(test, target_arch = "wasm32"))]
+    fn len(&self) -> u32 {
+        let header = self.region.prefix::<IndexRingHeader>();
+        let head = header.head.load(Ordering::Acquire);
+        let tail = header.tail.load(Ordering::Acquire);
+        head.wrapping_sub(tail)
+    }
+
     fn push(&mut self, value: u32) -> Result<(), ()> {
         let (capacity, head, tail) = {
             let header = self.region.prefix::<IndexRingHeader>();
@@ -176,6 +184,29 @@ impl IndexRing {
         let offset = mem::size_of::<IndexRingHeader>();
         let capacity = self.capacity() as usize;
         self.region.slice_mut::<u32>(offset, capacity)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn wasm_layout(&self) -> crate::wasm::IndexRingLayout {
+        use core::convert::TryFrom;
+
+        let region = self.region.wasm_region();
+        let header_len =
+            u32::try_from(mem::size_of::<IndexRingHeader>()).expect("index header fits in u32");
+        crate::wasm::IndexRingLayout {
+            header: crate::wasm::Region {
+                offset: region.offset,
+                length: header_len,
+            },
+            entries: crate::wasm::Region {
+                offset: region.offset + header_len,
+                length: region
+                    .length
+                    .checked_sub(header_len)
+                    .expect("index ring region shorter than header"),
+            },
+            capacity: self.capacity(),
+        }
     }
 }
 
@@ -280,6 +311,34 @@ impl SlotPool {
                 false,
                 "free ring overflowed – did pop paths stall? idx={idx}"
             );
+        }
+    }
+
+    #[cfg(any(test, target_arch = "wasm32"))]
+    /// Returns the current number of free slots available in the pool.
+    pub fn free_len(&self) -> u32 {
+        self.free_ring.len()
+    }
+
+    #[cfg(any(test, target_arch = "wasm32"))]
+    /// Returns the number of slots queued in the ready ring.
+    pub fn ready_len(&self) -> u32 {
+        self.ready_ring.len()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    /// Exposes the byte ranges backing this slot pool within shared linear memory.
+    pub fn wasm_layout(&self) -> crate::wasm::SlotPoolLayout {
+        use core::convert::TryFrom;
+
+        let slots_region = self.slots.wasm_region();
+        crate::wasm::SlotPoolLayout {
+            slots: slots_region,
+            slot_size: u32::try_from(self.slot_size)
+                .expect("slot size must fit into 32 bits on wasm32"),
+            slot_count: self.slot_count,
+            free: self.free_ring.wasm_layout(),
+            ready: self.ready_ring.wasm_layout(),
         }
     }
 }

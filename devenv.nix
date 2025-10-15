@@ -1,6 +1,17 @@
 { pkgs, config, lib, ... }:
 let
-  basePkgs = with pkgs; [ jq git fd ripgrep cargo-nextest trunk wasm-pack chromedriver ];
+  basePkgs = with pkgs; [
+    jq
+    git
+    fd
+    ripgrep
+    cargo-nextest
+    trunk
+    wasm-pack
+    chromedriver
+    python3
+    rustup
+  ];
 in {
   packages = basePkgs;
 
@@ -114,8 +125,48 @@ in {
   tasks."test:fast".exec = "cargo nextest run --profile fast";
   tasks."test:slow".exec =
     "cargo nextest run --profile slow --run-ignored ignored-only --features loom";
-  tasks."test:wasm-smoke".exec =
-    "wasm-pack test --headless --chrome --chromedriver=$(which chromedriver) crates/tests";
+  tasks."test:wasm-smoke".exec = ''
+    set -euo pipefail
+
+    export RUSTUP_TOOLCHAIN=nightly
+    export RUSTFLAGS="''${RUSTFLAGS:-} -C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--max-memory=1073741824 -C link-arg=--shared-memory -C link-arg=--import-memory"
+    export WASM_BINDGEN_DISABLE_THREAD_TRANSFORM=1
+
+    rustup toolchain install nightly --profile minimal --target wasm32-unknown-unknown --component rust-src --no-self-update >/dev/null
+
+    install_root="''${CARGO_HOME:-$HOME/.cargo}"
+
+    if ! command -v wasm-bindgen-test-runner >/dev/null; then
+      RUSTFLAGS= cargo install wasm-bindgen-cli --version 0.2.104 --locked --root "$install_root" >/dev/null
+    fi
+
+    registry_dir="''${CARGO_HOME:-$HOME/.cargo}/registry/src"
+    crate_root=""
+    if [ -d "$registry_dir" ]; then
+      for idx in "$registry_dir"/index.crates.io-*; do
+        if [ -d "$idx" ] && [ -d "$idx"/wasm-bindgen-cli-support-0.2.104 ]; then
+          crate_root="$idx/wasm-bindgen-cli-support-0.2.104"
+          break
+        fi
+      done
+    fi
+
+    if [ -n "$crate_root" ] && ! rg -q "WASM_BINDGEN_DISABLE_THREAD_TRANSFORM" "$crate_root/src/transforms/threads/mod.rs"; then
+      patch -N --directory="$crate_root" < patches/wasm-bindgen-cli-support-disable-thread-transform.patch
+      RUSTFLAGS= cargo install wasm-bindgen-cli --version 0.2.104 --locked --force --offline --root "$install_root" >/dev/null
+    fi
+
+    rustup run nightly cargo test -p tests --target wasm32-unknown-unknown --no-run -Z build-std=std,panic_abort
+
+    wasm_path=$(find target/wasm32-unknown-unknown/debug/deps -maxdepth 1 -name 'tests-*.wasm' | head -n 1)
+    if [ -z "$wasm_path" ]; then
+      echo "failed to locate wasm test artifact" >&2
+      exit 1
+    fi
+
+    CHROMEDRIVER=$(which chromedriver) \
+      rustup run nightly wasm-bindgen-test-runner "$wasm_path"
+  '';
 
   tasks."web:watch".exec = "trunk watch --config web/trunk.toml";
   tasks."web:serve".exec =

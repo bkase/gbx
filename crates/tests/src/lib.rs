@@ -1,18 +1,10 @@
 //! Test suite for the Game Boy emulator.
 
-use wasm_bindgen_test::*;
+#[cfg(target_arch = "wasm32")]
+mod wasm;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod schema_golden;
-
-wasm_bindgen_test_configure!(run_in_browser);
-
-#[wasm_bindgen_test]
-fn wasm_smoke_test() {
-    // Basic smoke test to ensure wasm builds work
-    let sum: i32 = [1, 1].iter().copied().sum();
-    assert_eq!(sum, 2);
-}
 
 #[cfg(test)]
 mod tests {

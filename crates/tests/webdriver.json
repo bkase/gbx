@@ -1,0 +1,11 @@
+{
+  "goog:chromeOptions": {
+    "args": [
+      "--headless=new",
+      "--disable-gpu",
+      "--enable-features=SharedArrayBuffer,SharedArrayBufferOnDesktop",
+      "--js-flags=--experimental-wasm-threads",
+      "--js-flags=--experimental-wasm-bulk-memory"
+    ]
+  }
+}

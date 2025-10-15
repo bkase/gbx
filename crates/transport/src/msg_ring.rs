@@ -198,6 +198,29 @@ impl MsgRing {
         self.capacity as usize
     }
 
+    #[cfg(target_arch = "wasm32")]
+    /// Describes the header/data regions backing this ring inside shared linear memory.
+    pub fn wasm_layout(&self) -> crate::wasm::MsgRingLayout {
+        use core::convert::TryFrom;
+
+        let region = self.region.wasm_region();
+        let header_len = u32::try_from(HEADER_SIZE).expect("header size fits in u32");
+        crate::wasm::MsgRingLayout {
+            header: crate::wasm::Region {
+                offset: region.offset,
+                length: header_len,
+            },
+            data: crate::wasm::Region {
+                offset: region.offset + header_len,
+                length: region
+                    .length
+                    .checked_sub(header_len)
+                    .expect("region length must exceed header"),
+            },
+            capacity_bytes: self.capacity,
+        }
+    }
+
     /// Attempts to reserve space for `need` archived bytes.
     pub fn try_reserve(&mut self, need: usize) -> Option<ProducerGrant<'_>> {
         self.try_reserve_with(self.default_envelope, need)

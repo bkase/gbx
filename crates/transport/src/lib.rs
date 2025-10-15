@@ -11,6 +11,8 @@ mod msg_ring;
 mod region;
 pub mod schema;
 mod slot_pool;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 
 pub use error::{TransportError, TransportResult};
 pub use msg_ring::{Envelope, MsgRing, ProducerGrant, Record};

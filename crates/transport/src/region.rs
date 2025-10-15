@@ -9,7 +9,10 @@ use crate::{TransportError, TransportResult};
 use std::alloc::{alloc, alloc_zeroed, dealloc, Layout};
 use std::marker::PhantomData;
 use std::mem;
-use std::ptr::{self, NonNull};
+use std::ptr::NonNull;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::ptr;
 
 #[cfg(not(target_arch = "wasm32"))]
 type NativeMap = memmap2::MmapMut;
@@ -71,6 +74,7 @@ enum InitKind {
 }
 
 impl InitKind {
+    #[cfg(not(target_arch = "wasm32"))]
     fn is_zeroed(self) -> bool {
         matches!(self, InitKind::Zeroed)
     }
@@ -193,6 +197,17 @@ impl<State> SharedRegion<State> {
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn wasm_region(&self) -> crate::wasm::Region {
+        use core::convert::TryFrom;
+
+        crate::wasm::Region {
+            offset: self.as_ptr() as u32,
+            length: u32::try_from(self.len)
+                .expect("shared region length must fit into 32 bits on wasm32"),
+        }
+    }
+
     fn assert_view_bounds<T>(&self, offset_bytes: usize, len: usize) {
         let elem_size = mem::size_of::<T>();
         if elem_size == 0 {
@@ -299,12 +314,16 @@ impl SharedRegion<Uninit> {
 
 impl<State> Drop for SharedRegion<State> {
     fn drop(&mut self) {
-        if let Backing::Owned { ptr, layout } = &self.backing {
-            // SAFETY: `ptr`/`layout` originate from `alloc` in `heap_backing`; they stay valid until
-            // this drop runs, so deallocating here releases the allocation once.
-            unsafe {
-                dealloc(ptr.as_ptr(), *layout);
+        match &self.backing {
+            Backing::Owned { ptr, layout } => {
+                // SAFETY: `ptr`/`layout` originate from `alloc` in `heap_backing`; they stay valid
+                // until this drop runs, so deallocating here releases the allocation once.
+                unsafe {
+                    dealloc(ptr.as_ptr(), *layout);
+                }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            Backing::Native(_) => {}
         }
     }
 }
