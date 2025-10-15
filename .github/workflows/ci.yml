@@ -103,6 +103,24 @@ jobs:
       - name: Fast tests (PR suite)
         run: devenv tasks run test:fast
 
+  golden:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Install devenv.sh
+        run: nix profile install nixpkgs#devenv
+
+      - name: Transport schema goldens
+        run: devenv tasks run test:golden
+
   wasm-smoke:
     runs-on: macos-14
     needs: build-wasm

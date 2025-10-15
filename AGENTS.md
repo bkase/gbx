@@ -26,6 +26,7 @@
 - Name tests after the behavior under scrutiny (`component_action_expectedOutcome`).
 - When adding services or reducers, include regression coverage that exercises backpressure policies (e.g., WouldBlock requeues).
 - Run `devenv tasks run test:workspace` before submitting any change; add targeted `cargo test -p <crate>` invocations when iterating.
+- Transport ABI goldens live under `crates/tests/golden/*.bin` and are verified by `devenv tasks run test:golden` (also run via the commit hook). Regenerate fixtures after intentional schema changes with `UPDATE_GOLDEN=1 devenv tasks run test:golden`, then commit the refreshed `.bin` files together with the schema bump.
 
 ## Commit & Pull Request Guidelines
 - Use imperative present-tense commit subjects (`Add scheduler retry path`); group related changes per commit.

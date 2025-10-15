@@ -145,6 +145,8 @@ in {
       enable = true;
       name = "test:workspace";
       entry = "${pkgs.writeShellScript "test-workspace-hook" ''
+        set -e
+        devenv tasks run test:golden
         devenv tasks run test:workspace
       ''}";
       pass_filenames = false;

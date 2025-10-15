@@ -238,7 +238,7 @@ impl SlotPool {
 * **Version skew** (envelope `ver` > supported): drop record + counter; no panic.
 * **Corruption guards**: debug-only magic fields and optional CRC32 on Frame slots; drop + counter if mismatch.
 * **Closed**: surfaced as `SubmitOutcome::Closed` by higher layers.
-* **Schema stability**: golden archived fixtures in `tests/golden/*.bin` per tag. CI fails on byte diff unless `ver` bump + golden regen.
+* **Schema stability**: golden archived fixtures in `crates/tests/golden/*.bin` cover each transport-visible message. CI runs `devenv tasks run test:golden` and fails on byte drift unless the schema `ver` is bumped and fixtures are regenerated via `UPDATE_GOLDEN=1 devenv tasks run test:golden`.
 
 ---
 

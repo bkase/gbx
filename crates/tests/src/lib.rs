@@ -2,6 +2,9 @@
 
 use wasm_bindgen_test::*;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod schema_golden;
+
 wasm_bindgen_test_configure!(run_in_browser);
 
 #[wasm_bindgen_test]
