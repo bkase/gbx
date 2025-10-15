@@ -29,7 +29,7 @@ in {
   tasks."format:workspace".exec = "cargo fmt --all";
   tasks."format:check".exec = "cargo fmt --all -- --check";
   tasks."lint:workspace".exec =
-    "cargo clippy --all-targets --all-features -- -D warnings";
+    "cargo clippy --all-targets --all-features -- -D warnings -D clippy::undocumented_unsafe_blocks";
   tasks."build:workspace".exec = "cargo build --all-targets";
   tasks."build:wasm".exec =
     "cargo build --target wasm32-unknown-unknown -p app";
@@ -38,7 +38,7 @@ in {
   # Tight test discipline tasks (stable API for CI)
   tasks."test:fast".exec = "cargo nextest run --profile fast";
   tasks."test:slow".exec =
-    "cargo nextest run --profile slow --run-ignored ignored-only";
+    "cargo nextest run --profile slow --run-ignored ignored-only --features loom";
   tasks."test:wasm-smoke".exec =
     "wasm-pack test --headless --chrome --chromedriver=$(which chromedriver) crates/tests";
 

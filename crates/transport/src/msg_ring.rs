@@ -16,10 +16,13 @@
 //! directly, then commit to move the head pointer. Consumers peek and pop
 //! records by reading envelopes and payload slices without additional copies.
 
-use crate::region::{RegionInit, SharedRegion};
+use crate::region::{SharedRegion, Zeroed};
 use crate::{TransportError, TransportResult};
+#[cfg(feature = "loom")]
+use loom::sync::atomic::{AtomicU32, Ordering};
 use std::cell::Cell;
 use std::mem::size_of;
+#[cfg(not(feature = "loom"))]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 const ALIGN: usize = 8;
@@ -156,7 +159,7 @@ impl Drop for ProducerGrant<'_> {
 
 /// Single-producer / single-consumer message ring following the transport spec layout.
 pub struct MsgRing {
-    region: SharedRegion,
+    region: SharedRegion<Zeroed>,
     capacity: u32,
     default_envelope: Envelope,
     consumer_meta: Cell<Option<RecordMeta>>,
@@ -174,13 +177,13 @@ impl MsgRing {
         }
 
         let total_bytes = HEADER_SIZE + aligned_capacity;
-        let mut region = SharedRegion::new_aligned(total_bytes, ALIGN.max(64), RegionInit::Zeroed)?;
+        let mut region = SharedRegion::<Zeroed>::new_aligned_zeroed(total_bytes, ALIGN.max(64))?;
 
         // Initialise header in place.
         let header_ptr = region.as_mut_ptr() as *mut MsgRingHeader;
-        unsafe {
-            header_ptr.write(MsgRingHeader::new(aligned_capacity as u32));
-        }
+        // SAFETY: The pointer comes from a unique `&mut` to the freshly allocated region, so writing
+        // once here initialises the header bytes before any shared access.
+        unsafe { header_ptr.write(MsgRingHeader::new(aligned_capacity as u32)) };
 
         Ok(Self {
             region,
@@ -245,14 +248,17 @@ impl MsgRing {
     ///
     /// `None` indicates the ring is currently empty.
     pub fn consumer_peek(&self) -> Option<Record<'_>> {
-        let header = self.header();
+        let header = self.header_ptr();
         let capacity = self.capacity_bytes();
         let data = self.data_slice();
 
-        let mut tail = header.tail_bytes.load(Ordering::Relaxed) as usize;
+        // SAFETY: `header` was derived from `self.region` and points to the live ring header; reading
+        // the atomic tail via the raw pointer is sound for the lifetime of `&self`.
+        let mut tail = unsafe { (*header).tail_bytes.load(Ordering::Relaxed) as usize };
 
         loop {
-            let head = header.head_bytes.load(Ordering::Acquire) as usize;
+            // SAFETY: The header pointer remains valid; atomic loads on the head are race-free.
+            let head = unsafe { (*header).head_bytes.load(Ordering::Acquire) as usize };
             if head == tail {
                 self.consumer_meta.set(None);
                 return None;
@@ -263,7 +269,8 @@ impl MsgRing {
                 .unwrap_or_else(|| panic!("corrupt len at {tail}"));
 
             if total_len == SENTINEL {
-                header.tail_bytes.store(0, Ordering::Release);
+                // SAFETY: Resetting the tail to zero only touches the atomic field inside the header.
+                unsafe { (*header).tail_bytes.store(0, Ordering::Release) };
                 tail = 0;
                 continue;
             }
@@ -296,9 +303,11 @@ impl MsgRing {
 
     /// Advances the consumer tail past the record returned by the last `consumer_peek`.
     pub fn consumer_pop_advance(&mut self) {
-        let header = self.header();
-        let tail = header.tail_bytes.load(Ordering::Relaxed) as usize;
-        let head = header.head_bytes.load(Ordering::Acquire) as usize;
+        let header = self.header_ptr();
+        // SAFETY: The header pointer originates from `self.region`; atomic loads are safe here.
+        let tail = unsafe { (*header).tail_bytes.load(Ordering::Relaxed) as usize };
+        // SAFETY: Same pointer validity as above; acquire load observes the latest head.
+        let head = unsafe { (*header).head_bytes.load(Ordering::Acquire) as usize };
 
         if tail == head {
             self.consumer_meta.set(None);
@@ -318,7 +327,12 @@ impl MsgRing {
             new_tail -= capacity;
         }
 
-        header.tail_bytes.store(new_tail as u32, Ordering::Release);
+        // SAFETY: We only mutate the atomic tail field through the valid header pointer.
+        unsafe {
+            (*header)
+                .tail_bytes
+                .store(new_tail as u32, Ordering::Release)
+        };
         self.consumer_meta.set(None);
     }
 
@@ -327,32 +341,26 @@ impl MsgRing {
         self.consumer_meta.get().map(|meta| meta.envelope)
     }
 
-    fn header(&self) -> &MsgRingHeader {
-        unsafe { &*(self.region.as_ptr() as *const MsgRingHeader) }
+    fn header_ptr(&self) -> *const MsgRingHeader {
+        self.region.as_ptr() as *const MsgRingHeader
     }
 
     fn data_slice(&self) -> &[u8] {
-        let ptr = unsafe {
-            // SAFETY: `SharedRegion` allocates at least `HEADER_SIZE + capacity_bytes`
-            // contiguous bytes and remains alive for the `'self` lifetime.
-            self.region.as_ptr().add(HEADER_SIZE)
-        };
-        unsafe {
-            // SAFETY: Range is fully within the allocation created above.
-            std::slice::from_raw_parts(ptr, self.capacity_bytes())
-        }
+        // SAFETY: The allocation length is `HEADER_SIZE + capacity`; offsetting by the header size
+        // stays within bounds and points at the data section.
+        let ptr = unsafe { self.region.as_ptr().add(HEADER_SIZE) };
+        // SAFETY: We borrow the data section immutably for the lifetime of `&self`, so no mutable
+        // aliases can exist simultaneously.
+        unsafe { std::slice::from_raw_parts(ptr, self.capacity_bytes()) }
     }
 
     fn data_slice_mut(&mut self) -> &mut [u8] {
-        let ptr = unsafe {
-            // SAFETY: `SharedRegion` exposes a unique mutable pointer for the live allocation.
-            self.region.as_mut_ptr().add(HEADER_SIZE)
-        };
-        unsafe {
-            // SAFETY: No aliasing occurs because `MsgRing` upholds the single-producer,
-            // single-consumer discipline; the slice covers the data section only.
-            std::slice::from_raw_parts_mut(ptr, self.capacity_bytes())
-        }
+        // SAFETY: Allocation is header + data; the offset respects bounds and alignment, and
+        // `&mut self` guarantees exclusive access.
+        let ptr = unsafe { self.region.as_mut_ptr().add(HEADER_SIZE) };
+        // SAFETY: The resulting slice spans only the data portion; the SPSC contract prevents any
+        // concurrent `&mut` aliases.
+        unsafe { std::slice::from_raw_parts_mut(ptr, self.capacity_bytes()) }
     }
 
     fn finish_producer(
@@ -393,15 +401,21 @@ impl MsgRing {
     }
 
     fn load_head_relaxed(&self) -> usize {
-        self.header().head_bytes.load(Ordering::Relaxed) as usize
+        let header = self.header_ptr();
+        // SAFETY: The header pointer is derived from `self.region`; relaxed load is safe for SPSC.
+        unsafe { (*header).head_bytes.load(Ordering::Relaxed) as usize }
     }
 
     fn load_tail_acquire(&self) -> usize {
-        self.header().tail_bytes.load(Ordering::Acquire) as usize
+        let header = self.header_ptr();
+        // SAFETY: Pointer stays valid for the lifetime of `&self`; acquire enforces happens-before.
+        unsafe { (*header).tail_bytes.load(Ordering::Acquire) as usize }
     }
 
     fn store_head_release(&self, value: u32) {
-        self.header().head_bytes.store(value, Ordering::Release);
+        let header = self.header_ptr();
+        // SAFETY: `header` points into the owned region; storing updates the atomic head only.
+        unsafe { (*header).head_bytes.store(value, Ordering::Release) };
     }
 
     fn reserve_offset(
@@ -495,7 +509,7 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + (align - 1)) & !(align - 1)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "loom")))]
 mod tests {
     //! Unit coverage for the single-producer/single-consumer ring.
     use super::*;
@@ -613,7 +627,7 @@ mod tests {
         }
     }
 
-    /// Stress test: randomised record sizes never violate FIFO order or lose data.
+    /// Randomised stress covering wrap-around, FIFO order, and data retention.
     #[test]
     fn var_len_stress() {
         let mut ring = ring(4096);
@@ -716,6 +730,8 @@ mod tests {
             {
                 rkyv::check_archived_root::<SampleRep>(record.payload).unwrap();
             }
+            // SAFETY: Payload slices originate from the producer writing `SampleRep` via rkyv; the
+            // debug assertion above also validates the archive layout.
             let archived = unsafe { rkyv::archived_root::<SampleRep>(record.payload) };
             match (archived, expected_rep) {
                 (ArchivedSample::Ping { value }, SampleRep::Ping { value: expected }) => {
@@ -731,5 +747,147 @@ mod tests {
         } else {
             false
         }
+    }
+}
+
+#[cfg(all(test, feature = "loom"))]
+mod loom_tests {
+    use super::*;
+    use loom::sync::Arc;
+    use loom::thread;
+    use std::cell::UnsafeCell;
+
+    struct SharedMsgRing(UnsafeCell<MsgRing>);
+
+    // SAFETY: All mutable access to the ring goes through `with_mut`, which serialises callers in
+    // the Loom schedule; `MsgRing` itself upholds SPSC invariants.
+    unsafe impl Send for SharedMsgRing {}
+    // SAFETY: See above; `with_mut` enforces exclusive mutable access even under Loom interleavings.
+    unsafe impl Sync for SharedMsgRing {}
+
+    impl SharedMsgRing {
+        fn new(capacity: usize) -> Self {
+            let ring = MsgRing::new(capacity, Envelope::new(0xAB, 1)).expect("create msg ring");
+            Self(UnsafeCell::new(ring))
+        }
+
+        fn with_mut<R>(&self, f: impl FnOnce(&mut MsgRing) -> R) -> R {
+            // SAFETY: The `UnsafeCell` grants interior mutability; the closure receives the only
+            // mutable reference for the duration of the call.
+            unsafe { f(&mut *self.0.get()) }
+        }
+    }
+
+    /// Loom: ensures small fixed-size payloads stay consistent across interleavings.
+    #[test]
+    #[ignore]
+    fn slow_loom_msg_ring_small_records() {
+        loom::model(|| {
+            let shared = Arc::new(SharedMsgRing::new(128));
+            let producer = shared.clone();
+            let consumer = shared.clone();
+
+            let producer_thread = thread::spawn(move || {
+                for byte in 0u8..3 {
+                    loop {
+                        let pushed = producer.with_mut(|ring| {
+                            if let Some(mut grant) = ring.try_reserve(1) {
+                                grant.payload()[0] = byte;
+                                grant.commit(1);
+                                true
+                            } else {
+                                false
+                            }
+                        });
+
+                        if pushed {
+                            break;
+                        }
+                        thread::yield_now();
+                    }
+                }
+            });
+
+            let consumer_thread = thread::spawn(move || {
+                for expected in 0u8..3 {
+                    let payload = loop {
+                        let maybe = consumer.with_mut(|ring| {
+                            if let Some(record) = ring.consumer_peek() {
+                                let payload = record.payload.to_vec();
+                                ring.consumer_pop_advance();
+                                Some(payload)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(bytes) = maybe {
+                            break bytes;
+                        }
+                        thread::yield_now();
+                    };
+                    assert_eq!(payload, vec![expected]);
+                }
+            });
+
+            producer_thread.join().unwrap();
+            consumer_thread.join().unwrap();
+        });
+    }
+
+    /// Loom: exercises wrap sentinel logic under adversarial scheduling.
+    #[test]
+    #[ignore]
+    fn slow_loom_msg_ring_wrap_pad_sequence() {
+        loom::model(|| {
+            let shared = Arc::new(SharedMsgRing::new(64));
+            let producer = shared.clone();
+            let consumer = shared.clone();
+
+            let producer_thread = thread::spawn(move || {
+                for chunk in [16usize, 20, 12] {
+                    let payload = vec![chunk as u8; chunk];
+                    loop {
+                        let pushed = producer.with_mut(|ring| {
+                            if let Some(mut grant) = ring.try_reserve(payload.len()) {
+                                grant.payload()[..payload.len()].copy_from_slice(&payload);
+                                grant.commit(payload.len());
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                        if pushed {
+                            break;
+                        }
+                        thread::yield_now();
+                    }
+                }
+            });
+
+            let consumer_thread = thread::spawn(move || {
+                for chunk in [16usize, 20, 12] {
+                    let payload = loop {
+                        let maybe = consumer.with_mut(|ring| {
+                            if let Some(record) = ring.consumer_peek() {
+                                let payload = record.payload.to_vec();
+                                ring.consumer_pop_advance();
+                                Some(payload)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(bytes) = maybe {
+                            break bytes;
+                        }
+                        thread::yield_now();
+                    };
+                    assert_eq!(payload.len(), chunk);
+                    assert!(payload.iter().all(|b| *b == chunk as u8));
+                }
+            });
+
+            producer_thread.join().unwrap();
+            consumer_thread.join().unwrap();
+        });
     }
 }

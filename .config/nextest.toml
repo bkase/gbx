@@ -19,14 +19,14 @@ terminate-after = 100
 
 # Slow profile (ignored-only, for nightly/manual runs)
 # - Runs only #[ignore] tests
-# - Still has 20s hard cap per test
+# - Allows longer execution for loom exploration (60s hard cap)
 # - Less strict on failure reporting for exploratory/deep tests
 [profile.slow]
 status-level = "pass"
 fail-fast = false
 retries = 0
 
-# terminate-after is 1 period (1 * 20s = 20s hard cap)
+# terminate-after is 1 period (1 * 60s = 60s hard cap for loom tests)
 [profile.slow.slow-timeout]
-period = "20s"
+period = "60s"
 terminate-after = 1
