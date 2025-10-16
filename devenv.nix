@@ -1,16 +1,32 @@
 { pkgs, config, lib, ... }:
 let
-  basePkgs = with pkgs; [ jq git fd ripgrep cargo-nextest trunk wasm-pack chromedriver ];
+  basePkgs = with pkgs; [
+    jq
+    git
+    fd
+    ripgrep
+    cargo-nextest
+    trunk
+    wasm-pack
+    wasm-tools
+    wabt
+    chromedriver
+    python3
+    rustup
+  ];
+
+  # Shared WASM build flags for atomics and shared memory
+  wasmSharedMemoryFlags = "-C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--max-memory=1073741824 -C link-arg=--shared-memory -C link-arg=--import-memory";
 in {
   packages = basePkgs;
 
   languages.rust = {
     enable = true;
-    channel = "stable";
-    version = "1.90.0";
-    components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" ];
+    channel = "nightly";
+    components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" "rust-src" ];
     targets = [ "wasm32-unknown-unknown" ];
     # Strict compilation: warnings as errors, require docs on public items
+    # For native builds, use strict warnings
     rustflags = "-D warnings -D missing_docs";
   };
 
@@ -21,6 +37,9 @@ in {
     PROPTEST_TIMEOUT = "2000"; # ms for the whole property test
     # Nicer output locally
     NEXTEST_HIDE_PROGRESS_BAR = "0";
+    # WASM build flags: shared memory with atomics
+    # These apply to wasm32-unknown-unknown target builds
+    CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS = wasmSharedMemoryFlags;
   };
 
   enterShell = '' '';
@@ -106,6 +125,34 @@ in {
   tasks."build:workspace".exec = "cargo build --all-targets";
   tasks."build:wasm".exec =
     "cargo build --target wasm32-unknown-unknown -p app";
+  tasks."build:transport-worker".exec = ''
+    set -euo pipefail
+
+    # Ensure WASM build uses shared memory flags
+    # RUSTFLAGS applies to all compilation units including std when using -Z build-std
+    export RUSTFLAGS="${wasmSharedMemoryFlags}"
+
+    cargo build -p transport-worker --target wasm32-unknown-unknown --release -Z build-std=std,panic_abort
+
+    artifact="target/wasm32-unknown-unknown/release/transport_worker.wasm"
+    output="web/pkg/transport_worker.wasm"
+
+    if [ ! -f "$artifact" ]; then
+      echo "expected worker artifact at $artifact" >&2
+      exit 1
+    fi
+
+    mkdir -p web/pkg
+    rm -f web/pkg/transport_worker_bg.wasm web/pkg/transport_worker_bg.wasm.d.ts web/pkg/transport_worker.js web/pkg/transport_worker.d.ts
+
+    wasm-tools strip "$artifact" -o "$output"
+
+    if ! wasm-objdump -x -j import "$output" | rg -q 'memory\[0\].*shared.*env\.memory'; then
+      wasm-objdump -x -j import "$output"
+      echo "transport_worker.wasm must import env.memory as shared; check build flags." >&2
+      exit 1
+    fi
+  '';
   tasks."test:workspace".exec = "cargo test --all-targets";
   tasks."test:golden".exec =
     "cargo test -p tests transport_schema_goldens_v1";
@@ -114,8 +161,46 @@ in {
   tasks."test:fast".exec = "cargo nextest run --profile fast";
   tasks."test:slow".exec =
     "cargo nextest run --profile slow --run-ignored ignored-only --features loom";
-  tasks."test:wasm-smoke".exec =
-    "wasm-pack test --headless --chrome --chromedriver=$(which chromedriver) crates/tests";
+  tasks."test:wasm-smoke".exec = ''
+    set -euo pipefail
+
+    export WASM_BINDGEN_DISABLE_THREAD_TRANSFORM=1
+    # For tests, we want atomics but not strict warnings
+    export RUSTFLAGS="${wasmSharedMemoryFlags}"
+
+    install_root="''${CARGO_HOME:-$HOME/.cargo}"
+
+    if ! command -v wasm-bindgen-test-runner >/dev/null; then
+      RUSTFLAGS= cargo install wasm-bindgen-cli --version 0.2.104 --locked --root "$install_root" >/dev/null
+    fi
+
+    registry_dir="''${CARGO_HOME:-$HOME/.cargo}/registry/src"
+    crate_root=""
+    if [ -d "$registry_dir" ]; then
+      for idx in "$registry_dir"/index.crates.io-*; do
+        if [ -d "$idx" ] && [ -d "$idx"/wasm-bindgen-cli-support-0.2.104 ]; then
+          crate_root="$idx/wasm-bindgen-cli-support-0.2.104"
+          break
+        fi
+      done
+    fi
+
+    if [ -n "$crate_root" ] && ! rg -q "WASM_BINDGEN_DISABLE_THREAD_TRANSFORM" "$crate_root/src/transforms/threads/mod.rs"; then
+      patch -N --directory="$crate_root" < patches/wasm-bindgen-cli-support-disable-thread-transform.patch
+      RUSTFLAGS= cargo install wasm-bindgen-cli --version 0.2.104 --locked --force --offline --root "$install_root" >/dev/null
+    fi
+
+    cargo test -p tests --target wasm32-unknown-unknown --no-run -Z build-std=std,panic_abort
+
+    wasm_path=$(find target/wasm32-unknown-unknown/debug/deps -maxdepth 1 -name 'tests-*.wasm' | head -n 1)
+    if [ -z "$wasm_path" ]; then
+      echo "failed to locate wasm test artifact" >&2
+      exit 1
+    fi
+
+    CHROMEDRIVER=$(which chromedriver) \
+      wasm-bindgen-test-runner "$wasm_path"
+  '';
 
   tasks."web:watch".exec = "trunk watch --config web/trunk.toml";
   tasks."web:serve".exec =

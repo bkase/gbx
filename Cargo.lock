@@ -1241,6 +1241,7 @@ dependencies = [
  "mock",
  "rkyv",
  "transport",
+ "transport-worker",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -1469,6 +1470,13 @@ dependencies = [
  "memmap2",
  "rand",
  "rkyv",
+]
+
+[[package]]
+name = "transport-worker"
+version = "0.1.0"
+dependencies = [
+ "transport",
 ]
 
 [[package]]

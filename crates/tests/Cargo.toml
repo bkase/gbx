@@ -11,6 +11,7 @@ world = { path = "../world" }
 bytecheck = "0.6"
 rkyv = { version = "0.7", features = ["validation"] }
 transport = { path = "../transport" }
+transport-worker = { path = "../transport-worker" }
 wasm-bindgen = "0.2"
 wasm-bindgen-test = "0.3"
 wasm-bindgen-futures = "0.4"

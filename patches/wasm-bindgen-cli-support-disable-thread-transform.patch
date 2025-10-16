@@ -1,0 +1,15 @@
+*** Update File: src/transforms/threads/mod.rs
+@@
+-use crate::wasm_conventions;
+-use anyhow::{anyhow, bail, Error};
+-use std::cmp;
++use crate::wasm_conventions;
++use anyhow::{anyhow, bail, Error};
++use std::cmp;
++use std::env;
+@@
+-pub fn is_enabled(module: &Module) -> bool {
++pub fn is_enabled(module: &Module) -> bool {
++    if env::var("WASM_BINDGEN_DISABLE_THREAD_TRANSFORM").is_ok() {
++        return false;
++    }

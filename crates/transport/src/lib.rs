@@ -11,6 +11,7 @@ mod msg_ring;
 mod region;
 pub mod schema;
 mod slot_pool;
+pub mod wasm;
 
 pub use error::{TransportError, TransportResult};
 pub use msg_ring::{Envelope, MsgRing, ProducerGrant, Record};

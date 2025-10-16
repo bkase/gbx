@@ -9,7 +9,10 @@ use crate::{TransportError, TransportResult};
 use std::alloc::{alloc, alloc_zeroed, dealloc, Layout};
 use std::marker::PhantomData;
 use std::mem;
-use std::ptr::{self, NonNull};
+use std::ptr::NonNull;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::ptr;
 
 #[cfg(not(target_arch = "wasm32"))]
 type NativeMap = memmap2::MmapMut;
@@ -22,6 +25,10 @@ enum Backing {
         ptr: NonNull<u8>,
         layout: Layout,
     },
+    #[cfg(target_arch = "wasm32")]
+    Borrowed {
+        offset: usize,
+    },
 }
 
 impl Backing {
@@ -30,6 +37,8 @@ impl Backing {
             #[cfg(not(target_arch = "wasm32"))]
             Backing::Native(map) => map.as_mut_ptr(),
             Backing::Owned { ptr, .. } => ptr.as_ptr(),
+            #[cfg(target_arch = "wasm32")]
+            Backing::Borrowed { offset } => *offset as *mut u8,
         }
     }
 
@@ -38,6 +47,8 @@ impl Backing {
             #[cfg(not(target_arch = "wasm32"))]
             Backing::Native(map) => map.as_ptr(),
             Backing::Owned { ptr, .. } => ptr.as_ptr(),
+            #[cfg(target_arch = "wasm32")]
+            Backing::Borrowed { offset } => *offset as *const u8,
         }
     }
 }
@@ -71,6 +82,7 @@ enum InitKind {
 }
 
 impl InitKind {
+    #[cfg(not(target_arch = "wasm32"))]
     fn is_zeroed(self) -> bool {
         matches!(self, InitKind::Zeroed)
     }
@@ -155,6 +167,24 @@ impl<State> SharedRegion<State> {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    /// Unsafely reinterprets a slice of the shared linear memory as a `SharedRegion`.
+    ///
+    /// Callers must guarantee that the region lies within the imported memory, satisfies
+    /// the alignment, and remains valid for the duration of the region's lifetime.
+    pub unsafe fn from_linear_memory(len: usize, alignment: usize, offset: u32) -> Self {
+        assert!(
+            alignment.is_power_of_two(),
+            "alignment {alignment} must be a power of two"
+        );
+        let base = offset as usize;
+        assert!(
+            base % alignment == 0,
+            "shared region offset {offset} misaligned for {alignment}"
+        );
+        Self::from_backing(len, alignment, Backing::Borrowed { offset: base })
+    }
+
     fn into_state<Next>(self) -> SharedRegion<Next> {
         // SAFETY: `SharedRegion<State>` and `SharedRegion<Next>` share identical layout and drop
         // semantics because the marker type does not affect stored data.
@@ -191,6 +221,17 @@ impl<State> SharedRegion<State> {
         // SAFETY: `SharedRegion` owns an allocation of `len` bytes, so the derived pointer is
         // in-bounds and uniquely borrowed for the lifetime of `&mut self`.
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn wasm_region(&self) -> crate::wasm::Region {
+        use core::convert::TryFrom;
+
+        crate::wasm::Region {
+            offset: self.as_ptr() as u32,
+            length: u32::try_from(self.len)
+                .expect("shared region length must fit into 32 bits on wasm32"),
+        }
     }
 
     fn assert_view_bounds<T>(&self, offset_bytes: usize, len: usize) {
@@ -299,12 +340,18 @@ impl SharedRegion<Uninit> {
 
 impl<State> Drop for SharedRegion<State> {
     fn drop(&mut self) {
-        if let Backing::Owned { ptr, layout } = &self.backing {
-            // SAFETY: `ptr`/`layout` originate from `alloc` in `heap_backing`; they stay valid until
-            // this drop runs, so deallocating here releases the allocation once.
-            unsafe {
-                dealloc(ptr.as_ptr(), *layout);
+        match &self.backing {
+            Backing::Owned { ptr, layout } => {
+                // SAFETY: `ptr`/`layout` originate from `alloc` in `heap_backing`; they stay valid
+                // until this drop runs, so deallocating here releases the allocation once.
+                unsafe {
+                    dealloc(ptr.as_ptr(), *layout);
+                }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            Backing::Native(_) => {}
+            #[cfg(target_arch = "wasm32")]
+            Backing::Borrowed { .. } => {}
         }
     }
 }
