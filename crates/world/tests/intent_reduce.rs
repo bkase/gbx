@@ -1,3 +1,5 @@
+//! Integration tests validating world intent reducer behavior.
+
 use std::sync::Arc;
 use world::{Intent, IntentReducer, KernelCmd, TickPurpose, WorkCmd, World};
 

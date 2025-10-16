@@ -311,105 +311,91 @@ Three deques: **P0** (UI & critical), **P1** (cadence/autopump), **P2** (backgro
 pub struct App {
   pub world: World,
   pub hub: ServicesHub,
-  pub p0: VecDeque<Intent>, pub p1: VecDeque<Intent>, pub p2: VecDeque<Intent>,
+  pub intents: PQueues<Intent>,
   pub report_budget: usize,        // e.g., 32
-  pub intent_pull_budget: usize,   // e.g., 3
+  pub intent_budget: usize,        // e.g., 3
   pub health: HealthFlags,         // gpu_blocked, service_pressure, fatal
   pub stall_relief_frames: u8,     // countdown for mitigation window
 }
 
 impl App {
-  pub fn raf_tick(&mut self, ui_intents: impl IntoIterator<Item=Intent>) {
-    // Enqueue UI (P0) and cadence (P1). Note: TickDone may also defer PumpFrame.
-    for i in ui_intents { self.p0.push_back(i); }
-    self.p1.push_back(Intent::PumpFrame); // coalesces with deferred PumpFrame conceptually
+  pub fn raf_tick(&mut self, ui_intents: impl IntoIterator<Item = Intent>) {
+    for intent in ui_intents {
+      self.intents.enqueue(IntentPriority::P0, intent);
+    }
+    self.intents.enqueue(IntentPriority::P1, Intent::PumpFrame);
 
-    // Phase A — bounded intent processing
     let mut pulled = 0;
-    while pulled < self.intent_pull_budget {
-      let intent = self.pop_next_intent(); if intent.is_none() { break; }
-      let intent = intent.unwrap();
+    while pulled < self.intent_budget {
+      let Some(intent) = self.intents.pop_next() else { break; };
+      let mut needs_retry = false;
 
-      for wc in self.world.reduce_intent(intent.clone()) {
-        let pol = wc.default_policy();
-        let out = self.hub.try_submit_work(&wc);
-        self.observe_work_outcome(intent.clone(), &wc, pol, out);
+      for work in self.world.reduce_intent(intent.clone()) {
+        let policy = work.default_policy();
+        let outcome = self.hub.try_submit_work(work.clone());
+
+        if matches!(
+          (policy, outcome),
+          (SubmitPolicy::Lossless, SubmitOutcome::WouldBlock | SubmitOutcome::Closed)
+        ) {
+          needs_retry = true;
+          self.health.service_pressure = true;
+          break;
+        }
       }
+
+      if needs_retry {
+        self.intents.enqueue_front_p0(intent);
+      }
+
       pulled += 1;
     }
 
-    // Phase B — fair, budgeted drain → A/V now + deferrals
-    let reports = self.hub.drain_all_rr(self.report_budget);
-    for rep in reports {
-      let fu = self.world.reduce_report(rep);
+    for report in self.hub.drain_reports(self.report_budget) {
+      let follow_ups = self.world.reduce_report(report);
 
-      // Immediate A/V (skip BestEffort if we're in GPU stall relief)
-      for av in fu.immediate_av {
-        let pol = av.default_policy(self.world.display_lane);
-        if self.health.gpu_blocked && matches!(pol, SubmitPolicy::BestEffort) {
-          continue; // throttle thumbnails while recovering
+      for av in follow_ups.immediate_av {
+        let policy = av.default_policy(self.world.display_lane);
+        if self.health.gpu_blocked && matches!(policy, SubmitPolicy::BestEffort) {
+          continue;
         }
-        let out = self.hub.try_submit_av(&av);
-        match (pol, out) {
+
+        let outcome = self.hub.try_submit_av(av.clone());
+        match (policy, outcome) {
           (SubmitPolicy::Must, SubmitOutcome::WouldBlock) => {
             self.health.gpu_blocked = true;
             self.stall_relief_frames = self.stall_relief_frames.max(10);
           }
           (SubmitPolicy::Must, SubmitOutcome::Accepted | SubmitOutcome::Coalesced) => {
-            // success clears stall flags and relief countdown
             self.health.gpu_blocked = false;
-            if self.stall_relief_frames > 0 { self.stall_relief_frames -= 1; }
+            if self.stall_relief_frames > 0 {
+              self.stall_relief_frames -= 1;
+            }
           }
-          (SubmitPolicy::BestEffort, SubmitOutcome::Dropped) => { /* OK */ }
-          (_, SubmitOutcome::Closed) => { self.health.fatal = true; return; }
+          (_, SubmitOutcome::Closed) => {
+            self.health.fatal = true;
+            return;
+          }
           _ => {}
         }
       }
 
-      // Defer future work by priority
-      for d in fu.deferred_intents {
-        self.enqueue_intent(d, match d {
-          Intent::LoadRom { .. } => Priority::P0,
-          Intent::PumpFrame      => Priority::P1,
-          _                      => Priority::P2,
-        });
+      for (priority, intent) in follow_ups.deferred_intents {
+        self.intents.enqueue(priority, intent);
       }
     }
 
-    // decay mitigation window
-    if self.stall_relief_frames > 0 && !self.health.gpu_blocked { self.stall_relief_frames -= 1; }
-  }
-
-  fn pop_next_intent(&mut self) -> Option<Intent> {
-    self.p0.pop_front().or_else(|| self.p1.pop_front()).or_else(|| self.p2.pop_front())
-  }
-  fn enqueue_intent(&mut self, i: Intent, p: Priority) {
-    match p { Priority::P0 => self.p0.push_back(i), Priority::P1 => self.p1.push_back(i), Priority::P2 => self.p2.push_back(i) }
-  }
-
-  fn observe_work_outcome(&mut self, origin: Intent, wc: &WorkCmd, pol: SubmitPolicy, out: SubmitOutcome) {
-    match (pol, out) {
-      // Coalesce returning Coalesced is fine (expected under load)
-      (SubmitPolicy::Coalesce, SubmitOutcome::Coalesced) => {}
-
-      // *** CRITICAL: Lossless must not be dropped — requeue origin immediately ***
-      (SubmitPolicy::Lossless, SubmitOutcome::WouldBlock) => {
-        // push FRONT of P0 to retry next tick; never lose the user action
-        self.p0.push_front(origin);
-        self.health.service_pressure = true;
-      }
-
-      (SubmitPolicy::BestEffort, SubmitOutcome::Dropped) => { /* OK; metric only */ }
-
-      (_, SubmitOutcome::Closed) => { self.health.fatal = true; }
-
-      _ => {}
+    if self.stall_relief_frames > 0 && !self.health.gpu_blocked {
+      self.stall_relief_frames -= 1;
     }
   }
 }
 
-#[derive(Clone, Copy)] pub enum Priority { P0, P1, P2 }
-pub struct HealthFlags { pub gpu_blocked: bool, pub service_pressure: bool, pub fatal: bool }
+pub struct HealthFlags {
+  pub gpu_blocked: bool,
+  pub service_pressure: bool,
+  pub fatal: bool,
+}
 ```
 
 ---
@@ -418,7 +404,7 @@ pub struct HealthFlags { pub gpu_blocked: bool, pub service_pressure: bool, pub 
 
 - **Native**: SPSC rings or `crossbeam_channel`; each service may be a thread; queues and atomics are internal to services.
 - **Web**: SharedArrayBuffer SPSC rings; Workers for kernel groups; main thread stays pull-based; Workers may block with `Atomics.wait`.
-- Store/hub **never** see queues or atomics.
+- Store/hub layers **never** see queues or atomics.
 
 ---
 

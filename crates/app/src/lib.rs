@@ -1,17 +1,21 @@
 //! Main application scheduler coordinating intents, reports, and services.
 
+pub mod health;
+/// Priority queue utilities for deterministic scheduling.
+pub mod priority;
+
 use hub::{
     Intent, IntentPriority, IntentReducer, ReportReducer, ServicesHub, SubmitOutcome, SubmitPolicy,
     DEFAULT_INTENT_BUDGET, DEFAULT_REPORT_BUDGET,
 };
-use std::collections::VecDeque;
+use priority::PQueues;
 use world::World;
 
 /// Main application scheduler coordinating world state, services, and intent/report processing.
 pub struct Scheduler {
     world: World,
     hub: ServicesHub,
-    intent_queues: [VecDeque<Intent>; 3],
+    intent_queues: PQueues<Intent>,
     intent_budget: usize,
     report_budget: usize,
 }
@@ -32,11 +36,7 @@ impl Scheduler {
         Self {
             world,
             hub,
-            intent_queues: [
-                VecDeque::with_capacity(16),
-                VecDeque::with_capacity(16),
-                VecDeque::with_capacity(16),
-            ],
+            intent_queues: PQueues::with_capacity(16),
             intent_budget,
             report_budget,
         }
@@ -44,21 +44,17 @@ impl Scheduler {
 
     /// Enqueues an intent with the specified priority.
     pub fn enqueue_intent(&mut self, priority: IntentPriority, intent: Intent) {
-        self.intent_queues[priority.index()].push_back(intent);
+        self.intent_queues.enqueue(priority, intent);
     }
 
     /// Enqueues an intent at the front of the P0 (highest priority) queue.
     pub fn enqueue_front_p0(&mut self, intent: Intent) {
-        self.intent_queues[IntentPriority::P0.index()].push_front(intent);
+        self.intent_queues.enqueue_front_p0(intent);
     }
 
     /// Returns the count of pending intents per priority level [P0, P1, P2].
     pub fn pending_intents(&self) -> [usize; 3] {
-        [
-            self.intent_queues[0].len(),
-            self.intent_queues[1].len(),
-            self.intent_queues[2].len(),
-        ]
+        self.intent_queues.len_per_priority()
     }
 
     /// Returns an immutable reference to the world state.
@@ -71,27 +67,12 @@ impl Scheduler {
         &mut self.world
     }
 
-    fn next_priority(&self) -> Option<IntentPriority> {
-        if !self.intent_queues[0].is_empty() {
-            Some(IntentPriority::P0)
-        } else if !self.intent_queues[1].is_empty() {
-            Some(IntentPriority::P1)
-        } else if !self.intent_queues[2].is_empty() {
-            Some(IntentPriority::P2)
-        } else {
-            None
-        }
-    }
-
     fn process_intents(&mut self) {
         let mut budget = self.intent_budget;
         while budget > 0 {
-            let Some(priority) = self.next_priority() else {
+            let Some(intent) = self.intent_queues.pop_next() else {
                 break;
             };
-            let intent = self.intent_queues[priority.index()]
-                .pop_front()
-                .expect("queue not empty");
             budget -= 1;
             let commands = self.world.reduce_intent(intent.clone());
 
@@ -125,7 +106,7 @@ impl Scheduler {
         for report in reports {
             let follow_ups = self.world.reduce_report(report);
             for av in follow_ups.immediate_av {
-                let policy = av.default_policy();
+                let policy = av.default_policy(self.world.display_lane);
                 let outcome = self.hub.try_submit_av(av);
                 if matches!(outcome, SubmitOutcome::WouldBlock | SubmitOutcome::Closed)
                     && matches!(policy, SubmitPolicy::Must | SubmitPolicy::Lossless)

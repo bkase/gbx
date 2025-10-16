@@ -44,6 +44,17 @@ pub enum SubmitOutcome {
     Closed,
 }
 
+/// Priority level for intent scheduling (P0 is highest).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntentPriority {
+    /// Highest priority, reserved for latency-critical actions.
+    P0,
+    /// Medium priority for frame progression and UI-affecting intents.
+    P1,
+    /// Lowest priority for maintenance or background intents.
+    P2,
+}
+
 /// Image span produced by the kernel for presentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrameSpan {
@@ -118,6 +129,19 @@ pub enum Intent {
     },
     /// Select which display lane should be presented.
     SelectDisplayLane(u16),
+}
+
+impl Intent {
+    /// Returns the scheduler priority for this intent.
+    pub fn priority(&self) -> IntentPriority {
+        match self {
+            Intent::PumpFrame => IntentPriority::P1,
+            Intent::TogglePause => IntentPriority::P0,
+            Intent::SetSpeed(_) => IntentPriority::P0,
+            Intent::LoadRom { .. } => IntentPriority::P0,
+            Intent::SelectDisplayLane(_) => IntentPriority::P1,
+        }
+    }
 }
 
 /// Command directed at the kernel service.
@@ -262,6 +286,13 @@ pub enum KernelRep {
         /// Monotonically increasing frame identifier.
         frame_id: u64,
     },
+    /// ROM loading completed for a group.
+    RomLoaded {
+        /// Kernel group identifier.
+        group: u16,
+        /// Size of the loaded ROM in bytes.
+        bytes_len: usize,
+    },
     /// Audio buffer ready for playback.
     AudioReady {
         /// Kernel group identifier.
@@ -333,7 +364,7 @@ pub struct FollowUps {
     /// AV commands that should be submitted immediately (phase B).
     pub immediate_av: SmallVec<[AvCmd; 8]>,
     /// Intents to enqueue for the next frame (phase A).
-    pub deferred_intents: SmallVec<[Intent; 8]>,
+    pub deferred_intents: SmallVec<[(IntentPriority, Intent); 8]>,
 }
 
 impl FollowUps {
@@ -348,8 +379,8 @@ impl FollowUps {
     }
 
     /// Adds a deferred intent for the next phase A pull.
-    pub fn push_deferred_intent(&mut self, intent: Intent) {
-        self.deferred_intents.push(intent);
+    pub fn push_deferred_intent(&mut self, priority: IntentPriority, intent: Intent) {
+        self.deferred_intents.push((priority, intent));
     }
 }
 

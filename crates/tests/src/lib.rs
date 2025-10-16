@@ -32,6 +32,7 @@ mod tests {
         scheduler.enqueue_intent(
             IntentPriority::P0,
             Intent::LoadRom {
+                group: 0,
                 bytes: Arc::clone(&rom_bytes),
             },
         );
@@ -59,11 +60,18 @@ mod tests {
         scheduler.enqueue_intent(
             IntentPriority::P0,
             Intent::LoadRom {
+                group: 0,
                 bytes: Arc::clone(&rom_bytes),
             },
         );
 
-        scheduler.enqueue_intent(IntentPriority::P0, Intent::LoadRom { bytes: rom_bytes_b });
+        scheduler.enqueue_intent(
+            IntentPriority::P0,
+            Intent::LoadRom {
+                group: 0,
+                bytes: rom_bytes_b,
+            },
+        );
 
         scheduler.run_once();
 
@@ -90,6 +98,7 @@ mod tests {
         scheduler.enqueue_intent(
             IntentPriority::P0,
             Intent::LoadRom {
+                group: 0,
                 bytes: Arc::clone(&rom_bytes),
             },
         );

@@ -2,6 +2,7 @@
 
 use hub::{FsCmd, FsRep, FsServiceHandle, Service, SubmitOutcome, SubmitPolicy};
 use parking_lot::Mutex;
+use smallvec::SmallVec;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -48,10 +49,20 @@ impl Default for FsService {
 }
 
 impl Service for FsService {
-    type Command = FsCmd;
-    type Report = FsRep;
+    type Cmd = FsCmd;
+    type Rep = FsRep;
 
-    fn try_submit(&self, cmd: Self::Command, policy: SubmitPolicy) -> SubmitOutcome {
+    fn try_submit(&self, cmd: &Self::Cmd) -> SubmitOutcome {
+        let policy = match cmd {
+            FsCmd::Persist { path, .. } => {
+                if path.file_name().and_then(|name| name.to_str()) == Some("manual-save") {
+                    SubmitPolicy::Lossless
+                } else {
+                    SubmitPolicy::Coalesce
+                }
+            }
+        };
+
         let mut reports = self.reports.lock();
         if reports.len() >= self.capacity {
             let status = self.handle_overflow(policy, &mut reports);
@@ -61,15 +72,30 @@ impl Service for FsService {
         }
 
         match cmd {
-            FsCmd::Persist { key, .. } => {
-                reports.push_back(FsRep::Saved { key, ok: true });
+            FsCmd::Persist { path, .. } => {
+                reports.push_back(FsRep::Saved {
+                    path: path.clone(),
+                    ok: true,
+                });
             }
         }
         SubmitOutcome::Accepted
     }
 
-    fn try_poll_report(&self) -> Option<Self::Report> {
-        self.reports.lock().pop_front()
+    fn drain(&self, max: usize) -> SmallVec<[Self::Rep; 8]> {
+        if max == 0 {
+            return SmallVec::new();
+        }
+
+        let mut reports = self.reports.lock();
+        let mut out = SmallVec::<[FsRep; 8]>::new();
+        let limit = max.min(reports.len());
+        for _ in 0..limit {
+            if let Some(rep) = reports.pop_front() {
+                out.push(rep);
+            }
+        }
+        out
     }
 }
 

@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `crates/hub`, `crates/world`, and `crates/app` hold the core Elm-style scheduler, reducers, and message types.
+- `crates/hub` provides the services hub, shared scheduling traits, and default budgets; `crates/world` exports the message schema plus reducers; `crates/app` hosts the Elm-style scheduler built on top.
 - `crates/services/*` provide non-blocking service shims (kernel, GPU, audio, FS); replace or extend these for real backends.
 - Shared utilities live in `crates/transport`; test-only scaffolding is in `crates/mock`.
 - Integration-style tests reside in `crates/tests`; architecture and scaffolding notes are under `docs/`.

@@ -34,6 +34,10 @@ pub struct World {
     pub display_lane: u16,
     /// Whether the scheduler should enqueue autopump intents.
     pub auto_pump: bool,
+    /// Whether a ROM has been successfully loaded since boot.
+    pub rom_loaded: bool,
+    /// Number of ROM load events observed.
+    pub rom_events: usize,
     /// Placeholder performance counters.
     pub perf: WorldPerf,
     /// Placeholder health flags.
@@ -60,6 +64,26 @@ impl World {
         FollowUps::new()
     }
 
+    /// Enables or disables automatic frame pumping.
+    pub fn set_auto_pump(&mut self, enabled: bool) {
+        self.auto_pump = enabled;
+    }
+
+    /// Returns whether a ROM has been loaded since boot.
+    pub fn rom_loaded(&self) -> bool {
+        self.rom_loaded
+    }
+
+    /// Returns the count of ROM load events processed.
+    pub fn rom_events(&self) -> usize {
+        self.rom_events
+    }
+
+    /// Returns the most recent frame identifier recorded by the world.
+    pub fn frame_id(&self) -> u64 {
+        self.perf.last_frame_id
+    }
+
     /// Helper used by tests to pretend a frame was presented.
     pub fn record_present(&mut self, frame_id: u64) {
         self.perf.last_frame_id = frame_id;
@@ -75,6 +99,10 @@ impl World {
         match report {
             Report::Kernel(KernelRep::LaneFrame { frame_id, .. }) => {
                 self.record_present(frame_id);
+            }
+            Report::Kernel(KernelRep::RomLoaded { .. }) => {
+                self.rom_loaded = true;
+                self.rom_events = self.rom_events.saturating_add(1);
             }
             Report::Audio(AudioRep::Underrun) => self.record_audio_underrun(),
             Report::Audio(AudioRep::Played { .. }) => {}
@@ -101,6 +129,8 @@ impl Default for World {
             speed: 1.0,
             display_lane: 0,
             auto_pump: true,
+            rom_loaded: false,
+            rom_events: 0,
             perf: WorldPerf::default(),
             health: WorldHealth::default(),
         }

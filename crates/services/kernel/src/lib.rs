@@ -1,7 +1,8 @@
 //! Kernel service implementation for emulator core execution.
 
 use hub::{
-    KernelCmd, KernelRep, KernelServiceHandle, Service, SubmitOutcome, SubmitPolicy, TickPurpose,
+    FrameSpan, KernelCmd, KernelRep, KernelServiceHandle, Service, SubmitOutcome, SubmitPolicy,
+    TickPurpose,
 };
 use parking_lot::Mutex;
 use smallvec::SmallVec;
@@ -54,32 +55,59 @@ impl KernelService {
                 }
             }
             KernelCmd::LoadRom { .. } => 1,
+            KernelCmd::SetInputs { .. } => 0,
+            KernelCmd::Terminate { .. } => 0,
         }
     }
 
-    fn materialise_reports(&self, cmd: KernelCmd) -> SmallVec<[KernelRep; 2]> {
+    fn submit_policy(cmd: &KernelCmd) -> SubmitPolicy {
         match cmd {
-            KernelCmd::Tick { purpose, budget } => {
+            KernelCmd::Tick { purpose, .. } => match purpose {
+                TickPurpose::Display => SubmitPolicy::Coalesce,
+                TickPurpose::Exploration => SubmitPolicy::BestEffort,
+            },
+            KernelCmd::LoadRom { .. } => SubmitPolicy::Lossless,
+            KernelCmd::SetInputs { .. } => SubmitPolicy::Lossless,
+            KernelCmd::Terminate { .. } => SubmitPolicy::Lossless,
+        }
+    }
+
+    fn materialise_reports(&self, cmd: &KernelCmd) -> SmallVec<[KernelRep; 2]> {
+        match cmd {
+            KernelCmd::Tick {
+                group,
+                purpose,
+                budget,
+            } => {
                 let mut reports = SmallVec::new();
                 if matches!(purpose, TickPurpose::Display) {
                     let mut frame_id = self.next_frame_id.lock();
                     let current_id = (*frame_id).wrapping_add(1);
                     *frame_id = current_id;
                     reports.push(KernelRep::LaneFrame {
+                        group: *group,
                         lane: 0,
+                        span: FrameSpan::default(),
                         frame_id: current_id,
                     });
                 }
-                reports.push(KernelRep::TickDone { purpose, budget });
+                reports.push(KernelRep::TickDone {
+                    group: *group,
+                    lanes_mask: 0b1,
+                    cycles_done: *budget,
+                });
                 reports
             }
-            KernelCmd::LoadRom { bytes } => {
+            KernelCmd::LoadRom { group, bytes } => {
                 let mut reports = SmallVec::new();
                 reports.push(KernelRep::RomLoaded {
+                    group: *group,
                     bytes_len: bytes.len(),
                 });
                 reports
             }
+            KernelCmd::SetInputs { .. } => SmallVec::new(),
+            KernelCmd::Terminate { .. } => SmallVec::new(),
         }
     }
 }
@@ -95,11 +123,12 @@ impl Default for KernelService {
 }
 
 impl Service for KernelService {
-    type Command = KernelCmd;
-    type Report = KernelRep;
+    type Cmd = KernelCmd;
+    type Rep = KernelRep;
 
-    fn try_submit(&self, cmd: Self::Command, policy: SubmitPolicy) -> SubmitOutcome {
-        let needed = self.reports_for(&cmd);
+    fn try_submit(&self, cmd: &Self::Cmd) -> SubmitOutcome {
+        let policy = Self::submit_policy(cmd);
+        let needed = self.reports_for(cmd);
         let mut reports = self.reports.lock();
 
         let status = self.ensure_capacity(reports.len(), needed, policy);
@@ -131,8 +160,20 @@ impl Service for KernelService {
         }
     }
 
-    fn try_poll_report(&self) -> Option<Self::Report> {
-        self.reports.lock().pop_front()
+    fn drain(&self, max: usize) -> SmallVec<[Self::Rep; 8]> {
+        if max == 0 {
+            return SmallVec::new();
+        }
+
+        let mut reports = self.reports.lock();
+        let mut out = SmallVec::<[KernelRep; 8]>::new();
+        let limit = max.min(reports.len());
+        for _ in 0..limit {
+            if let Some(rep) = reports.pop_front() {
+                out.push(rep);
+            }
+        }
+        out
     }
 }
 

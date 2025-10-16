@@ -23,8 +23,8 @@ gameboy-emulator/
 │      └─ ci.yml             # CI calling "devenv tasks run …" (see §4)
 ├─ Cargo.toml                # workspace manifest (members = crates/*)
 ├─ crates/
+│  ├─ hub/                   # Services hub + Service trait + SubmitOutcome
 │  ├─ world/                 # reducers + World state + FollowUps
-│  ├─ hub/                   # Service trait + ServicesHub + SubmitOutcome
 │  ├─ services/
 │  │   ├─ kernel/            # SIMD core; threads/workers glue
 │  │   ├─ gpu/               # wgpu (WebGPU) backend
@@ -348,7 +348,6 @@ Pass additional CLI flags to the dev server with `--`, e.g. `devenv tasks run we
 [workspace]
 members = [
   "crates/world",
-  "crates/hub",
   "crates/services/kernel",
   "crates/services/gpu",
   "crates/services/audio",

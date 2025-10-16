@@ -1,7 +1,8 @@
 //! Audio service implementation for managing sound playback.
 
-use hub::{AudioCmd, AudioRep, AudioServiceHandle, Service, SubmitOutcome, SubmitPolicy};
+use hub::{AudioCmd, AudioRep, AudioServiceHandle, Service, SubmitOutcome};
 use parking_lot::Mutex;
+use smallvec::SmallVec;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -33,35 +34,42 @@ impl Default for AudioService {
 }
 
 impl Service for AudioService {
-    type Command = AudioCmd;
-    type Report = AudioRep;
+    type Cmd = AudioCmd;
+    type Rep = AudioRep;
 
-    fn try_submit(&self, cmd: Self::Command, policy: SubmitPolicy) -> SubmitOutcome {
+    fn try_submit(&self, cmd: &Self::Cmd) -> SubmitOutcome {
         let mut reports = self.reports.lock();
         if reports.len() >= self.capacity {
-            return match policy {
-                SubmitPolicy::BestEffort => {
-                    reports.push_back(AudioRep::Underrun);
-                    SubmitOutcome::Dropped
-                }
-                SubmitPolicy::Coalesce => {
-                    reports.pop_front();
-                    SubmitOutcome::Coalesced
-                }
-                SubmitPolicy::Must | SubmitPolicy::Lossless => SubmitOutcome::WouldBlock,
-            };
+            return SubmitOutcome::WouldBlock;
         }
 
         match cmd {
-            AudioCmd::SubmitSamples { frames } => {
+            AudioCmd::Submit { span } => {
+                let frames = if span.channels == 0 {
+                    0
+                } else {
+                    span.samples.len() / usize::from(span.channels)
+                };
                 reports.push_back(AudioRep::Played { frames });
             }
         }
         SubmitOutcome::Accepted
     }
 
-    fn try_poll_report(&self) -> Option<Self::Report> {
-        self.reports.lock().pop_front()
+    fn drain(&self, max: usize) -> SmallVec<[Self::Rep; 8]> {
+        if max == 0 {
+            return SmallVec::new();
+        }
+
+        let mut reports = self.reports.lock();
+        let mut out = SmallVec::<[AudioRep; 8]>::new();
+        let limit = max.min(reports.len());
+        for _ in 0..limit {
+            if let Some(rep) = reports.pop_front() {
+                out.push(rep);
+            }
+        }
+        out
     }
 }
 

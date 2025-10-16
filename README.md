@@ -38,8 +38,8 @@ Ultra-high-performance, Elm-inspired Game Boy emulator built around SIMD kernels
 
 ```
 crates/
-  hub/         # submit policies, message enums, services hub
-  world/       # Elm-style reducers + World state
+  hub/         # Services hub, submit policies, shared scheduling traits
+  world/       # Message enums, reducers, and world state
   app/         # scheduler, priority queues, intent/report loop
   services/    # non-blocking service stubs (kernel, gpu, audio, fs)
   transport/   # utility queues and shared primitives
