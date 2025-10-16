@@ -16,6 +16,12 @@
 - Add a `devenv` task for every new developer workflow before documenting raw commands elsewhere.
 - **Always enter `devenv shell` for wasm builds/tests.** The shared-memory/atomics linker flags now live only in `devenv.nix`; invoking `cargo build --target wasm32-unknown-unknown` outside the shell will produce an incompatible artifact.
 
+## Collaboration Workflow
+- Expect concurrent teammates in this workspace; keep your edits scoped so parallel sessions do not conflict.
+- Stage only the files you personally touched during your session.
+- Run targeted tests that cover the files you created or modified before handing off.
+- When committing, include only the staged files you worked on in that session.
+
 ## Coding Style & Naming Conventions
 - Rust edition 2021, four-space indentation, and `rustfmt` are mandatory; configure editors to format on save.
 - Prefer `snake_case` for functions/variables, `CamelCase` for types, and `SCREAMING_SNAKE_CASE` for constants.
