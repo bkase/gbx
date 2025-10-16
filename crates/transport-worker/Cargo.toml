@@ -1,0 +1,10 @@
+[package]
+name = "transport-worker"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+transport = { path = "../transport" }

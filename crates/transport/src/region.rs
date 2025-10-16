@@ -25,6 +25,10 @@ enum Backing {
         ptr: NonNull<u8>,
         layout: Layout,
     },
+    #[cfg(target_arch = "wasm32")]
+    Borrowed {
+        offset: usize,
+    },
 }
 
 impl Backing {
@@ -33,6 +37,8 @@ impl Backing {
             #[cfg(not(target_arch = "wasm32"))]
             Backing::Native(map) => map.as_mut_ptr(),
             Backing::Owned { ptr, .. } => ptr.as_ptr(),
+            #[cfg(target_arch = "wasm32")]
+            Backing::Borrowed { offset } => *offset as *mut u8,
         }
     }
 
@@ -41,6 +47,8 @@ impl Backing {
             #[cfg(not(target_arch = "wasm32"))]
             Backing::Native(map) => map.as_ptr(),
             Backing::Owned { ptr, .. } => ptr.as_ptr(),
+            #[cfg(target_arch = "wasm32")]
+            Backing::Borrowed { offset } => *offset as *const u8,
         }
     }
 }
@@ -157,6 +165,24 @@ impl<State> SharedRegion<State> {
             backing,
             _marker: PhantomData,
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    /// Unsafely reinterprets a slice of the shared linear memory as a `SharedRegion`.
+    ///
+    /// Callers must guarantee that the region lies within the imported memory, satisfies
+    /// the alignment, and remains valid for the duration of the region's lifetime.
+    pub unsafe fn from_linear_memory(len: usize, alignment: usize, offset: u32) -> Self {
+        assert!(
+            alignment.is_power_of_two(),
+            "alignment {alignment} must be a power of two"
+        );
+        let base = offset as usize;
+        assert!(
+            base % alignment == 0,
+            "shared region offset {offset} misaligned for {alignment}"
+        );
+        Self::from_backing(len, alignment, Backing::Borrowed { offset: base })
     }
 
     fn into_state<Next>(self) -> SharedRegion<Next> {
@@ -324,6 +350,8 @@ impl<State> Drop for SharedRegion<State> {
             }
             #[cfg(not(target_arch = "wasm32"))]
             Backing::Native(_) => {}
+            #[cfg(target_arch = "wasm32")]
+            Backing::Borrowed { .. } => {}
         }
     }
 }

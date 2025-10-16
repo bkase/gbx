@@ -1,13 +1,18 @@
 //! Browser-focused wasm-bindgen tests exercising the SharedArrayBuffer transport.
 
 use std::cell::RefCell;
+use std::convert::TryFrom;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 use futures::channel::oneshot;
 use gloo_timers::future::TimeoutFuture;
-use js_sys::{Object, Reflect, SharedArrayBuffer};
-use transport::wasm::{IndexRingLayout, MsgRingLayout, Region};
+use js_sys::{Object, Reflect};
 use transport::{Envelope, MsgRing, Record, SlotPool, SlotPoolConfig, SlotPop, TransportError};
+use transport_worker::types::{
+    BackpressureConfig as WorkerBackpressureConfig, BurstConfig as WorkerBurstConfig,
+    FloodConfig as WorkerFloodConfig, ScenarioStats, WorkerInitDescriptor,
+};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::*;
@@ -16,6 +21,7 @@ use web_sys::{Blob, BlobPropertyBag, MessageEvent, Url, Worker, WorkerOptions, W
 wasm_bindgen_test_configure!(run_in_browser);
 
 const WORKER_SOURCE: &str = include_str!("../../../web/worker.js");
+const TRANSPORT_WORKER_WASM: &[u8] = include_bytes!("../../../web/pkg/transport_worker.wasm");
 
 const CMD_RING_CAPACITY: usize = 32 * 1024;
 const EVT_RING_CAPACITY: usize = 512 * 1024;
@@ -50,13 +56,18 @@ async fn transport_worker_flood_frames() {
         "event ring should mirror ready frames"
     );
     let result = ticket.wait().await.expect("worker flood result");
-    let produced = get_u32(&result, "produced");
-    assert_eq!(produced as usize, 10_000, "worker produced all frames");
-    let would_block = get_u32(&result, "wouldBlockReady");
-    assert_eq!(would_block, 0, "flood should not hit ready backpressure");
-    let would_block_evt = get_u32(&result, "wouldBlockEvt");
+    assert_eq!(result.status, 0, "worker flood result status");
+    let stats = result.stats.expect("flood stats present");
     assert_eq!(
-        would_block_evt, 0,
+        stats.produced as usize, 10_000,
+        "worker produced all frames"
+    );
+    assert_eq!(
+        stats.would_block_ready, 0,
+        "flood should not hit ready backpressure"
+    );
+    assert_eq!(
+        stats.would_block_evt, 0,
         "flood should not congest the event ring"
     );
     harness.assert_reconciliation();
@@ -65,7 +76,7 @@ async fn transport_worker_flood_frames() {
 #[wasm_bindgen_test]
 async fn transport_worker_burst_fairness() {
     let mut harness = TransportHarness::new().await.expect("init harness");
-    let config = BurstConfig {
+    let config = BurstScenario {
         bursts: 40,
         burst_size: 64,
         drain_budget: 8,
@@ -92,15 +103,15 @@ async fn transport_worker_burst_fairness() {
         "ready ring never exceeded slot budget"
     );
     let result = ticket.wait().await.expect("worker burst result");
-    let produced = get_u32(&result, "produced");
+    assert_eq!(result.status, 0, "burst status");
+    let stats = result.stats.expect("burst stats");
     assert_eq!(
-        produced,
+        stats.produced,
         (config.bursts * config.burst_size) as u32,
         "worker burst produced expected frames"
     );
-    let would_block_evt = get_u32(&result, "wouldBlockEvt");
     assert_eq!(
-        would_block_evt, 0,
+        stats.would_block_evt, 0,
         "bursty workload should not overflow event ring"
     );
     harness.assert_reconciliation();
@@ -109,7 +120,7 @@ async fn transport_worker_burst_fairness() {
 #[wasm_bindgen_test]
 async fn transport_worker_backpressure_recovery() {
     let mut harness = TransportHarness::new().await.expect("init harness");
-    let cfg = BackpressureConfig {
+    let cfg = BackpressureScenario {
         frames: 4096,
         pause_ms: 25,
     };
@@ -124,97 +135,106 @@ async fn transport_worker_backpressure_recovery() {
     assert_eq!(outcome.frames.len(), outcome.events.len());
     harness.assert_reconciliation();
     let result = ticket.wait().await.expect("worker backpressure result");
-    let produced = get_u32(&result, "produced");
-    assert_eq!(produced, cfg.frames, "worker produced requested frames");
-    let would_block_ready = get_u32(&result, "wouldBlockReady");
-    let free_waits = get_u32(&result, "freeWaits");
+    assert_eq!(result.status, 0, "backpressure status");
+    let stats = result.stats.expect("backpressure stats");
+    assert_eq!(
+        stats.produced, cfg.frames,
+        "worker produced requested frames"
+    );
     assert!(
-        would_block_ready > 0 || free_waits > 0,
+        stats.would_block_ready > 0 || stats.free_waits > 0,
         "producer should observe backpressure on ready or free rings"
     );
 }
 
-struct BurstConfig {
+struct BurstScenario {
     bursts: u32,
     burst_size: u32,
     drain_budget: u32,
 }
 
-struct BackpressureConfig {
+struct BackpressureScenario {
     frames: u32,
     pause_ms: u32,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy)]
+enum WorkerOp {
+    Init = 0,
+    Flood = 1,
+    Burst = 2,
+    Backpressure = 3,
+}
+
+enum WorkerConfig {
+    Flood(Box<WorkerFloodConfig>),
+    Burst(Box<WorkerBurstConfig>),
+    Backpressure(Box<WorkerBackpressureConfig>),
+}
+
 struct TransportHarness {
     worker: Worker,
-    _cmd_ring: MsgRing,
-    evt_ring: MsgRing,
-    frame_pool: SlotPool,
-    audio_pool: SlotPool,
+    buffers: TransportBuffers,
 }
 
 impl TransportHarness {
     async fn new() -> Result<Self, JsValue> {
         let buffers = TransportBuffers::new().map_err(|err| JsValue::from_str(&err.to_string()))?;
-        let layout = buffers.layout_object()?;
-        let config = buffers.config_object()?;
-        let memory = shared_memory_buffer()?;
-
+        let memory = shared_memory()?;
         let worker = spawn_worker()?;
-        let init = make_message("init", Some(memory), Some(layout), Some(config));
-        let ticket = WorkerTicket::new(worker.clone(), init)?;
-        ticket.wait().await?;
+        let module = worker_module_buffer();
+        let init_msg = make_init_message(buffers.descriptor_ptr(), &memory, &module)?;
+        let ticket = WorkerTicket::new(worker.clone(), init_msg, None, None)?;
+        let status = ticket.wait_status().await?;
+        if status != 0 {
+            return Err(JsValue::from_str(&format!(
+                "transport worker init failed with status {status}"
+            )));
+        }
 
-        Ok(Self {
-            worker,
-            _cmd_ring: buffers.cmd_ring,
-            evt_ring: buffers.evt_ring,
-            frame_pool: buffers.frame_pool,
-            audio_pool: buffers.audio_pool,
-        })
+        Ok(Self { worker, buffers })
     }
 
     fn start_flood(&self, frame_count: usize) -> Result<WorkerTicket, JsValue> {
-        let cfg = object_with_u32("frameCount", frame_count as u32)?;
-        let msg = make_message("flood", None, None, Some(cfg));
-        WorkerTicket::new(self.worker.clone(), msg)
+        let config = Box::new(WorkerFloodConfig {
+            frame_count: frame_count as u32,
+        });
+        let stats = Box::new(ScenarioStats::default());
+        let msg = make_run_message(WorkerOp::Flood, ptr_u32(&*config), ptr_u32(&*stats))?;
+        WorkerTicket::new(
+            self.worker.clone(),
+            msg,
+            Some(WorkerConfig::Flood(config)),
+            Some(stats),
+        )
     }
 
-    fn start_burst(&self, cfg: &BurstConfig) -> Result<WorkerTicket, JsValue> {
-        let msg_cfg = Object::new();
-        Reflect::set(
-            &msg_cfg,
-            &JsValue::from_str("bursts"),
-            &JsValue::from(cfg.bursts),
-        )?;
-        Reflect::set(
-            &msg_cfg,
-            &JsValue::from_str("burstSize"),
-            &JsValue::from(cfg.burst_size),
-        )?;
-        Reflect::set(
-            &msg_cfg,
-            &JsValue::from_str("drainBudget"),
-            &JsValue::from(cfg.drain_budget),
-        )?;
-        let msg = make_message("burst", None, None, Some(msg_cfg));
-        WorkerTicket::new(self.worker.clone(), msg)
+    fn start_burst(&self, cfg: &BurstScenario) -> Result<WorkerTicket, JsValue> {
+        let config = Box::new(WorkerBurstConfig {
+            bursts: cfg.bursts,
+            burst_size: cfg.burst_size,
+        });
+        let stats = Box::new(ScenarioStats::default());
+        let msg = make_run_message(WorkerOp::Burst, ptr_u32(&*config), ptr_u32(&*stats))?;
+        WorkerTicket::new(
+            self.worker.clone(),
+            msg,
+            Some(WorkerConfig::Burst(config)),
+            Some(stats),
+        )
     }
 
-    fn start_backpressure(&self, cfg: &BackpressureConfig) -> Result<WorkerTicket, JsValue> {
-        let msg_cfg = Object::new();
-        Reflect::set(
-            &msg_cfg,
-            &JsValue::from_str("frames"),
-            &JsValue::from(cfg.frames),
-        )?;
-        Reflect::set(
-            &msg_cfg,
-            &JsValue::from_str("pauseMs"),
-            &JsValue::from(cfg.pause_ms),
-        )?;
-        let msg = make_message("backpressure", None, None, Some(msg_cfg));
-        WorkerTicket::new(self.worker.clone(), msg)
+    fn start_backpressure(&self, cfg: &BackpressureScenario) -> Result<WorkerTicket, JsValue> {
+        let config = Box::new(WorkerBackpressureConfig { frames: cfg.frames });
+        let stats = Box::new(ScenarioStats::default());
+        let msg = make_run_message(WorkerOp::Backpressure, ptr_u32(&*config), ptr_u32(&*stats))?;
+        WorkerTicket::new(
+            self.worker.clone(),
+            msg,
+            Some(WorkerConfig::Backpressure(config)),
+            Some(stats),
+        )
     }
 
     async fn consume_frames(
@@ -228,38 +248,38 @@ impl TransportHarness {
         let mut max_ready_depth = 0usize;
 
         while frames.len() < target {
-            while let SlotPop::Ok { slot_idx } = self.frame_pool.pop_ready() {
-                let frame_id = read_frame_slot(&mut self.frame_pool, slot_idx);
+            while let SlotPop::Ok { slot_idx } = self.buffers.frame_pool.pop_ready() {
+                let frame_id = read_frame_slot(&mut self.buffers.frame_pool, slot_idx);
                 frames.push(frame_id);
-                self.frame_pool.release_free(slot_idx);
+                self.buffers.frame_pool.release_free(slot_idx);
             }
 
             let mut drained = 0usize;
             while drained < budget {
-                if let Some(record) = self.evt_ring.consumer_peek() {
+                if let Some(record) = self.buffers.evt_ring.consumer_peek() {
                     events.push(parse_event_record(&record));
                     drained += 1;
-                    self.evt_ring.consumer_pop_advance();
+                    self.buffers.evt_ring.consumer_pop_advance();
                 } else {
                     break;
                 }
             }
 
-            let in_use =
-                self.frame_pool.slot_count() as usize - self.frame_pool.free_len() as usize;
+            let in_use = self.buffers.frame_pool.slot_count() as usize
+                - self.buffers.frame_pool.free_len() as usize;
             max_ready_depth = max_ready_depth.max(in_use);
             TimeoutFuture::new(0).await;
         }
 
-        while let SlotPop::Ok { slot_idx } = self.frame_pool.pop_ready() {
-            let frame_id = read_frame_slot(&mut self.frame_pool, slot_idx);
+        while let SlotPop::Ok { slot_idx } = self.buffers.frame_pool.pop_ready() {
+            let frame_id = read_frame_slot(&mut self.buffers.frame_pool, slot_idx);
             frames.push(frame_id);
-            self.frame_pool.release_free(slot_idx);
+            self.buffers.frame_pool.release_free(slot_idx);
         }
 
-        while let Some(record) = self.evt_ring.consumer_peek() {
+        while let Some(record) = self.buffers.evt_ring.consumer_peek() {
             events.push(parse_event_record(&record));
-            self.evt_ring.consumer_pop_advance();
+            self.buffers.evt_ring.consumer_pop_advance();
         }
 
         Ok(DrainOutcome {
@@ -271,22 +291,22 @@ impl TransportHarness {
 
     fn assert_reconciliation(&self) {
         assert_eq!(
-            self.frame_pool.free_len(),
-            self.frame_pool.slot_count(),
+            self.buffers.frame_pool.free_len(),
+            self.buffers.frame_pool.slot_count(),
             "all frame slots should be free"
         );
-        assert_eq!(self.frame_pool.ready_len(), 0, "ready ring drained");
+        assert_eq!(self.buffers.frame_pool.ready_len(), 0, "ready ring drained");
         assert!(
-            self.evt_ring.consumer_peek().is_none(),
+            self.buffers.evt_ring.consumer_peek().is_none(),
             "event ring should be empty after drain"
         );
         assert_eq!(
-            self.audio_pool.free_len(),
-            self.audio_pool.slot_count(),
+            self.buffers.audio_pool.free_len(),
+            self.buffers.audio_pool.slot_count(),
             "audio slots remain unused and free"
         );
         assert_eq!(
-            self.audio_pool.ready_len(),
+            self.buffers.audio_pool.ready_len(),
             0,
             "audio ready ring should remain empty"
         );
@@ -304,6 +324,7 @@ struct TransportBuffers {
     evt_ring: MsgRing,
     frame_pool: SlotPool,
     audio_pool: SlotPool,
+    descriptor: NonNull<WorkerInitDescriptor>,
 }
 
 impl TransportBuffers {
@@ -318,97 +339,56 @@ impl TransportBuffers {
             slot_count: AUDIO_SLOT_COUNT as u32,
             slot_size: AUDIO_SLOT_SIZE,
         })?;
+        let descriptor = Box::new(WorkerInitDescriptor {
+            cmd_ring: cmd_ring.wasm_layout(),
+            evt_ring: evt_ring.wasm_layout(),
+            frame_pool: frame_pool.wasm_layout(),
+            audio_pool: audio_pool.wasm_layout(),
+        });
+        let descriptor = unsafe { NonNull::new_unchecked(Box::into_raw(descriptor)) };
         Ok(Self {
             cmd_ring,
             evt_ring,
             frame_pool,
             audio_pool,
+            descriptor,
         })
     }
 
-    fn layout_object(&self) -> Result<Object, JsValue> {
-        let layout = Object::new();
-        let frame_layout = self.frame_pool.wasm_layout();
-        let audio_layout = self.audio_pool.wasm_layout();
-        Reflect::set(
-            &layout,
-            &JsValue::from_str("cmdRing"),
-            &msg_ring_layout_to_js(self.cmd_ring.wasm_layout())?,
-        )?;
-        Reflect::set(
-            &layout,
-            &JsValue::from_str("evtRing"),
-            &msg_ring_layout_to_js(self.evt_ring.wasm_layout())?,
-        )?;
-        Reflect::set(
-            &layout,
-            &JsValue::from_str("frameSlots"),
-            &region_to_js(frame_layout.slots)?,
-        )?;
-        Reflect::set(
-            &layout,
-            &JsValue::from_str("frameFree"),
-            &index_ring_layout_to_js(frame_layout.free)?,
-        )?;
-        Reflect::set(
-            &layout,
-            &JsValue::from_str("frameReady"),
-            &index_ring_layout_to_js(frame_layout.ready)?,
-        )?;
-        Reflect::set(
-            &layout,
-            &JsValue::from_str("audioSlots"),
-            &region_to_js(audio_layout.slots)?,
-        )?;
-        Reflect::set(
-            &layout,
-            &JsValue::from_str("audioFree"),
-            &index_ring_layout_to_js(audio_layout.free)?,
-        )?;
-        Reflect::set(
-            &layout,
-            &JsValue::from_str("audioReady"),
-            &index_ring_layout_to_js(audio_layout.ready)?,
-        )?;
-        Ok(layout)
+    fn descriptor_ptr(&self) -> u32 {
+        ptr_u32(unsafe { self.descriptor.as_ref() })
     }
+}
 
-    fn config_object(&self) -> Result<Object, JsValue> {
-        let cfg = Object::new();
-        let frame_layout = self.frame_pool.wasm_layout();
-        let audio_layout = self.audio_pool.wasm_layout();
-        Reflect::set(
-            &cfg,
-            &JsValue::from_str("frameSlotCount"),
-            &JsValue::from(frame_layout.slot_count),
-        )?;
-        Reflect::set(
-            &cfg,
-            &JsValue::from_str("frameSlotSize"),
-            &JsValue::from(frame_layout.slot_size),
-        )?;
-        Reflect::set(
-            &cfg,
-            &JsValue::from_str("audioSlotCount"),
-            &JsValue::from(audio_layout.slot_count),
-        )?;
-        Reflect::set(
-            &cfg,
-            &JsValue::from_str("audioSlotSize"),
-            &JsValue::from(audio_layout.slot_size),
-        )?;
-        Ok(cfg)
+impl Drop for TransportBuffers {
+    fn drop(&mut self) {
+        unsafe {
+            drop(Box::from_raw(self.descriptor.as_ptr()));
+        }
     }
+}
+
+struct WorkerRunResult {
+    op: u32,
+    status: i32,
+    stats: Option<ScenarioStats>,
 }
 
 struct WorkerTicket {
     receiver: oneshot::Receiver<JsValue>,
     worker: Worker,
     closure: Option<Closure<dyn FnMut(MessageEvent)>>,
+    _config: Option<WorkerConfig>,
+    stats: Option<Box<ScenarioStats>>,
 }
 
 impl WorkerTicket {
-    fn new(worker: Worker, message: JsValue) -> Result<Self, JsValue> {
+    fn new(
+        worker: Worker,
+        message: JsValue,
+        config: Option<WorkerConfig>,
+        stats: Option<Box<ScenarioStats>>,
+    ) -> Result<Self, JsValue> {
         let (sender, receiver) = oneshot::channel::<JsValue>();
         let sender_cell = Rc::new(RefCell::new(Some(sender)));
         let sender_clone = sender_cell.clone();
@@ -425,10 +405,12 @@ impl WorkerTicket {
             receiver,
             worker,
             closure: Some(closure),
+            _config: config,
+            stats,
         })
     }
 
-    async fn wait(mut self) -> Result<JsValue, JsValue> {
+    async fn wait(mut self) -> Result<WorkerRunResult, JsValue> {
         let value = self
             .receiver
             .await
@@ -437,16 +419,22 @@ impl WorkerTicket {
         if let Some(closure) = self.closure.take() {
             drop(closure);
         }
-        Ok(value)
+
+        let status = get_i32_field(&value, "status")?;
+        let op = get_u32_field(&value, "op")?;
+        let stats = self.stats.map(|boxed| *boxed);
+
+        Ok(WorkerRunResult { op, status, stats })
+    }
+
+    async fn wait_status(self) -> Result<i32, JsValue> {
+        let result = self.wait().await?;
+        Ok(result.status)
     }
 }
 
-fn shared_memory_buffer() -> Result<SharedArrayBuffer, JsValue> {
-    let memory = wasm_bindgen::memory().unchecked_into::<js_sys::WebAssembly::Memory>();
-    let buffer = memory.buffer();
-    buffer
-        .dyn_into::<SharedArrayBuffer>()
-        .map_err(|_| JsValue::from_str("expected shared linear memory"))
+fn shared_memory() -> Result<js_sys::WebAssembly::Memory, JsValue> {
+    wasm_bindgen::memory().dyn_into::<js_sys::WebAssembly::Memory>()
 }
 
 fn spawn_worker() -> Result<Worker, JsValue> {
@@ -463,85 +451,58 @@ fn spawn_worker() -> Result<Worker, JsValue> {
     Ok(worker)
 }
 
-fn make_message(
-    kind: &str,
-    memory: Option<SharedArrayBuffer>,
-    layout: Option<Object>,
-    config: Option<Object>,
-) -> JsValue {
+fn worker_module_buffer() -> js_sys::ArrayBuffer {
+    let bytes = TRANSPORT_WORKER_WASM;
+    let array = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+    array.copy_from(bytes);
+    array.buffer()
+}
+
+fn make_init_message(
+    descriptor_ptr: u32,
+    memory: &js_sys::WebAssembly::Memory,
+    module: &js_sys::ArrayBuffer,
+) -> Result<JsValue, JsValue> {
     let msg = Object::new();
-    Reflect::set(&msg, &JsValue::from_str("type"), &JsValue::from_str(kind)).unwrap();
-    if let Some(memory) = memory {
-        Reflect::set(&msg, &JsValue::from_str("memory"), &memory.into()).unwrap();
-    }
-    if let Some(layout) = layout {
-        Reflect::set(&msg, &JsValue::from_str("layout"), &layout).unwrap();
-    }
-    if let Some(config) = config {
-        Reflect::set(&msg, &JsValue::from_str("config"), &config).unwrap();
-    }
-    msg.into()
+    set_u32(&msg, "op", WorkerOp::Init as u32)?;
+    set_u32(&msg, "descriptorPtr", descriptor_ptr)?;
+    Reflect::set(&msg, &JsValue::from_str("memory"), memory)?;
+    Reflect::set(&msg, &JsValue::from_str("module"), module)?;
+    Ok(msg.into())
 }
 
-fn object_with_u32(key: &str, value: u32) -> Result<Object, JsValue> {
-    let obj = Object::new();
-    Reflect::set(&obj, &JsValue::from_str(key), &JsValue::from(value))?;
-    Ok(obj)
+fn make_run_message(op: WorkerOp, config_ptr: u32, stats_ptr: u32) -> Result<JsValue, JsValue> {
+    let msg = Object::new();
+    set_u32(&msg, "op", op as u32)?;
+    set_u32(&msg, "configPtr", config_ptr)?;
+    set_u32(&msg, "statsPtr", stats_ptr)?;
+    Ok(msg.into())
 }
 
-fn region_to_js(region: Region) -> Result<JsValue, JsValue> {
-    let obj = Object::new();
-    Reflect::set(
-        &obj,
-        &JsValue::from_str("offset"),
-        &JsValue::from(region.offset),
-    )?;
-    Reflect::set(
-        &obj,
-        &JsValue::from_str("length"),
-        &JsValue::from(region.length),
-    )?;
-    Ok(obj.into())
+fn set_u32(target: &Object, key: &str, value: u32) -> Result<(), JsValue> {
+    Reflect::set(target, &JsValue::from_str(key), &JsValue::from(value))?;
+    Ok(())
 }
 
-fn msg_ring_layout_to_js(layout: MsgRingLayout) -> Result<JsValue, JsValue> {
-    let obj = Object::new();
-    Reflect::set(
-        &obj,
-        &JsValue::from_str("header"),
-        &region_to_js(layout.header)?,
-    )?;
-    Reflect::set(
-        &obj,
-        &JsValue::from_str("data"),
-        &region_to_js(layout.data)?,
-    )?;
-    Reflect::set(
-        &obj,
-        &JsValue::from_str("capacity"),
-        &JsValue::from(layout.capacity_bytes),
-    )?;
-    Ok(obj.into())
+fn get_u32_field(value: &JsValue, key: &str) -> Result<u32, JsValue> {
+    let field = Reflect::get(value, &JsValue::from_str(key))?;
+    field
+        .as_f64()
+        .ok_or_else(|| JsValue::from_str(&format!("expected number field '{key}'")))
+        .map(|number| number as u32)
 }
 
-fn index_ring_layout_to_js(layout: IndexRingLayout) -> Result<JsValue, JsValue> {
-    let obj = Object::new();
-    Reflect::set(
-        &obj,
-        &JsValue::from_str("header"),
-        &region_to_js(layout.header)?,
-    )?;
-    Reflect::set(
-        &obj,
-        &JsValue::from_str("entries"),
-        &region_to_js(layout.entries)?,
-    )?;
-    Reflect::set(
-        &obj,
-        &JsValue::from_str("capacity"),
-        &JsValue::from(layout.capacity),
-    )?;
-    Ok(obj.into())
+fn get_i32_field(value: &JsValue, key: &str) -> Result<i32, JsValue> {
+    let field = Reflect::get(value, &JsValue::from_str(key))?;
+    field
+        .as_f64()
+        .ok_or_else(|| JsValue::from_str(&format!("expected number field '{key}'")))
+        .map(|number| number as i32)
+}
+
+fn ptr_u32<T>(value: &T) -> u32 {
+    let addr = value as *const T as usize;
+    u32::try_from(addr).expect("wasm pointers fit in u32")
 }
 
 fn parse_event_record(record: &Record<'_>) -> u32 {
@@ -560,11 +521,4 @@ fn read_frame_slot(pool: &mut SlotPool, slot_idx: u32) -> u32 {
 fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     let slice = &bytes[offset..offset + 4];
     u32::from_le_bytes(slice.try_into().expect("slice length is 4"))
-}
-
-fn get_u32(value: &JsValue, key: &str) -> u32 {
-    Reflect::get(value, &JsValue::from_str(key))
-        .unwrap_or(JsValue::UNDEFINED)
-        .as_f64()
-        .unwrap_or_default() as u32
 }

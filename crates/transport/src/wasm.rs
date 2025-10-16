@@ -1,5 +1,3 @@
-#![cfg(target_arch = "wasm32")]
-
 //! Layout descriptors exposed when targeting `wasm32`.
 //!
 //! These lightweight structs capture byte offsets and lengths for regions
@@ -7,6 +5,7 @@
 //! typed array views without copying.
 
 /// Byte-range descriptor within the shared linear memory.
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Region {
     /// Offset in bytes from the start of the shared memory.
@@ -16,6 +15,7 @@ pub struct Region {
 }
 
 /// Layout metadata for a message ring.
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct MsgRingLayout {
     /// Header region containing the atomic cursors and metadata.
@@ -27,6 +27,7 @@ pub struct MsgRingLayout {
 }
 
 /// Layout metadata for an index ring (free/ready pools).
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct IndexRingLayout {
     /// Header region holding the atomic cursors.
@@ -38,6 +39,7 @@ pub struct IndexRingLayout {
 }
 
 /// Layout metadata for a slot pool (frame/audio).
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct SlotPoolLayout {
     /// Region covering all slot payload bytes.

@@ -95,6 +95,31 @@ impl IndexRing {
         Ok(Self { region })
     }
 
+    #[cfg(target_arch = "wasm32")]
+    /// Attaches to an existing index ring allocated in shared linear memory.
+    pub unsafe fn from_layout(layout: crate::wasm::IndexRingLayout) -> Self {
+        let header_offset = layout.header.offset as usize;
+        let header_len = layout.header.length as usize;
+        let entries_offset = layout.entries.offset as usize;
+        let entries_len = layout.entries.length as usize;
+        debug_assert!(
+            entries_offset == header_offset + header_len,
+            "index ring entries must follow header contiguously"
+        );
+        let total_len = header_len
+            .checked_add(entries_len)
+            .expect("index ring layout overflow");
+        let alignment = mem::align_of::<IndexRingHeader>();
+        let region =
+            SharedRegion::<Zeroed>::from_linear_memory(total_len, alignment, layout.header.offset);
+        debug_assert_eq!(
+            region.prefix::<IndexRingHeader>().capacity,
+            layout.capacity,
+            "index ring capacity mismatch"
+        );
+        Self { region }
+    }
+
     fn capacity(&self) -> u32 {
         self.region.prefix::<IndexRingHeader>().capacity
     }
@@ -255,6 +280,28 @@ impl SlotPool {
             slot_size,
             slot_count,
         })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    /// Attaches to a slot pool carved out in shared linear memory.
+    ///
+    /// Callers must ensure the layout references live shared memory that remains valid.
+    pub unsafe fn from_wasm_layout(layout: crate::wasm::SlotPoolLayout) -> Self {
+        let slots_len = layout.slots.length as usize;
+        let slots = SharedRegion::<Uninit>::from_linear_memory(
+            slots_len,
+            SLOT_ALIGNMENT.max(4096),
+            layout.slots.offset,
+        );
+        let free_ring = IndexRing::from_layout(layout.free);
+        let ready_ring = IndexRing::from_layout(layout.ready);
+        Self {
+            slots,
+            free_ring,
+            ready_ring,
+            slot_size: layout.slot_size as usize,
+            slot_count: layout.slot_count,
+        }
     }
 
     /// Returns the number of slots managed by the pool.

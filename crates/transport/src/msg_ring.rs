@@ -193,6 +193,41 @@ impl MsgRing {
         })
     }
 
+    #[cfg(target_arch = "wasm32")]
+    /// Unsafely attaches to an existing ring that already lives in shared linear memory.
+    ///
+    /// Callers must guarantee that the layout describes a region initialised by the host and that
+    /// the shared memory stays alive for the lifetime of the returned ring.
+    pub unsafe fn from_wasm_layout(
+        layout: crate::wasm::MsgRingLayout,
+        default_envelope: Envelope,
+    ) -> Self {
+        let header_offset = layout.header.offset as usize;
+        let header_len = layout.header.length as usize;
+        let data_offset = layout.data.offset as usize;
+        let data_len = layout.data.length as usize;
+        debug_assert!(
+            data_offset == header_offset + header_len,
+            "msg ring layout must place data immediately after the header"
+        );
+        let total_len = header_len
+            .checked_add(data_len)
+            .expect("ring layout lengths overflow");
+        debug_assert_eq!(
+            layout.capacity_bytes as usize, data_len,
+            "ring capacity must match data length"
+        );
+        let alignment = ALIGN.max(64);
+        let region =
+            SharedRegion::<Zeroed>::from_linear_memory(total_len, alignment, layout.header.offset);
+        Self {
+            region,
+            capacity: layout.capacity_bytes,
+            default_envelope,
+            consumer_meta: Cell::new(None),
+        }
+    }
+
     /// Returns the maximum payload capacity of the ring.
     pub fn capacity_bytes(&self) -> usize {
         self.capacity as usize
