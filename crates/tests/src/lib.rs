@@ -4,6 +4,9 @@
 mod wasm;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+mod native_e2e;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod schema_golden;
 
 #[cfg(test)]
