@@ -1,3 +1,4 @@
+//! Transport worker for WASM using wasm-bindgen pattern.
 #![allow(missing_docs)]
 
 pub use types::*;
@@ -54,6 +55,7 @@ mod wasm {
     use super::types::*;
     use std::cell::RefCell;
     use transport::{Envelope, MsgRing, SlotPool, SlotPush};
+    use wasm_bindgen::prelude::*;
 
     const OK: i32 = 0;
     const ERR_NULL_PTR: i32 = -1;
@@ -84,8 +86,10 @@ mod wasm {
         static STATE: RefCell<Option<WorkerState>> = RefCell::new(None);
     }
 
-    #[no_mangle]
-    pub extern "C" fn worker_init(descriptor_ptr: u32) -> i32 {
+    /// Initialize the worker with a descriptor containing ring layouts.
+    /// This uses wasm-bindgen so memory sharing happens via wasm_bindgen::memory().
+    #[wasm_bindgen]
+    pub fn worker_init(descriptor_ptr: u32) -> i32 {
         unsafe {
             let descriptor = match ref_from_u32::<WorkerInitDescriptor>(descriptor_ptr) {
                 Some(value) => value,
@@ -113,8 +117,8 @@ mod wasm {
         }
     }
 
-    #[no_mangle]
-    pub extern "C" fn worker_flood(config_ptr: u32, stats_ptr: u32) -> i32 {
+    #[wasm_bindgen]
+    pub fn worker_flood(config_ptr: u32, stats_ptr: u32) -> i32 {
         run_with_state::<_, FloodConfig>(config_ptr, stats_ptr, |state, cfg, stats| {
             let count = cfg.frame_count;
             for frame_id in 0..count {
@@ -123,8 +127,8 @@ mod wasm {
         })
     }
 
-    #[no_mangle]
-    pub extern "C" fn worker_burst(config_ptr: u32, stats_ptr: u32) -> i32 {
+    #[wasm_bindgen]
+    pub fn worker_burst(config_ptr: u32, stats_ptr: u32) -> i32 {
         run_with_state::<_, BurstConfig>(config_ptr, stats_ptr, |state, cfg, stats| {
             for burst in 0..cfg.bursts {
                 let base = burst * cfg.burst_size;
@@ -135,8 +139,8 @@ mod wasm {
         })
     }
 
-    #[no_mangle]
-    pub extern "C" fn worker_backpressure(config_ptr: u32, stats_ptr: u32) -> i32 {
+    #[wasm_bindgen]
+    pub fn worker_backpressure(config_ptr: u32, stats_ptr: u32) -> i32 {
         run_with_state::<_, BackpressureConfig>(config_ptr, stats_ptr, |state, cfg, stats| {
             let frames = cfg.frames;
             for frame_id in 0..frames {

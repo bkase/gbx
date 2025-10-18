@@ -15,13 +15,9 @@ use transport_worker::types::{
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use wasm_bindgen_test::*;
 use web_sys::{Blob, BlobPropertyBag, MessageEvent, Url, Worker, WorkerOptions, WorkerType};
 
-wasm_bindgen_test_configure!(run_in_browser);
-
 const WORKER_SOURCE: &str = include_str!("../../../web/worker.js");
-const TRANSPORT_WORKER_WASM: &[u8] = include_bytes!("../../../web/pkg/transport_worker.wasm");
 
 const CMD_RING_CAPACITY: usize = 32 * 1024;
 const EVT_RING_CAPACITY: usize = 512 * 1024;
@@ -36,115 +32,150 @@ const EVENT_ENVELOPE: Envelope = Envelope {
     flags: 0,
 };
 
-#[wasm_bindgen_test]
-fn wasm_smoke_test() {
-    let sum: i32 = [1, 1].iter().copied().sum();
-    assert_eq!(sum, 2);
+macro_rules! ensure {
+    ($cond:expr, $($arg:tt)*) => {
+        if !$cond {
+            return Err(JsValue::from_str(&format!($($arg)*)));
+        }
+    };
 }
 
-#[wasm_bindgen_test]
-async fn transport_worker_flood_frames() {
-    let mut harness = TransportHarness::new().await.expect("init harness");
-    let ticket = harness.start_flood(10_000).expect("post flood command");
-    let outcome = harness
-        .consume_frames(10_000, None)
-        .await
-        .expect("drain frames");
-    assert_eq!(outcome.frames.len(), 10_000, "all frames drained");
-    assert_eq!(
-        outcome.frames, outcome.events,
+macro_rules! ensure_eq {
+    ($left:expr, $right:expr, $($arg:tt)*) => {
+        let left_val = $left;
+        let right_val = $right;
+        if left_val != right_val {
+            return Err(JsValue::from_str(&format!(
+                concat!("{}", " != ", "{}", ": ", $($arg)*),
+                left_val, right_val
+            )));
+        }
+    };
+}
+
+#[wasm_bindgen]
+pub fn wasm_smoke_test() -> Result<(), JsValue> {
+    let sum: i32 = [1, 1].iter().copied().sum();
+    ensure!(sum == 2, "smoke test sum mismatch: {}", sum);
+    Ok(())
+}
+
+#[wasm_bindgen]
+pub async fn wasm_transport_worker_flood_frames() -> Result<(), JsValue> {
+    let mut harness = TransportHarness::new().await?;
+    let ticket = harness.start_flood(10_000)?;
+    let outcome = harness.consume_frames(10_000, None).await?;
+    ensure_eq!(
+        outcome.frames.len(),
+        10_000,
+        "all frames should drain"
+    );
+    ensure!(
+        outcome.frames == outcome.events,
         "event ring should mirror ready frames"
     );
-    let result = ticket.wait().await.expect("worker flood result");
-    assert_eq!(result.status, 0, "worker flood result status");
-    let stats = result.stats.expect("flood stats present");
-    assert_eq!(
-        stats.produced as usize, 10_000,
-        "worker produced all frames"
+    let result = ticket.wait().await?;
+    ensure!(result.status == 0, "worker flood result status {}", result.status);
+    let stats = result.stats.ok_or_else(|| JsValue::from_str("missing flood stats"))?;
+    ensure!(
+        stats.produced as usize == 10_000,
+        "worker produced {} frames (expected 10_000)",
+        stats.produced
     );
-    assert_eq!(
-        stats.would_block_ready, 0,
+    ensure!(
+        stats.would_block_ready == 0,
         "flood should not hit ready backpressure"
     );
-    assert_eq!(
-        stats.would_block_evt, 0,
+    ensure!(
+        stats.would_block_evt == 0,
         "flood should not congest the event ring"
     );
-    harness.assert_reconciliation();
+    harness.assert_reconciliation()?;
+    Ok(())
 }
 
-#[wasm_bindgen_test]
-async fn transport_worker_burst_fairness() {
-    let mut harness = TransportHarness::new().await.expect("init harness");
+#[wasm_bindgen]
+pub async fn wasm_transport_worker_burst_fairness() -> Result<(), JsValue> {
+    let mut harness = TransportHarness::new().await?;
     let config = BurstScenario {
         bursts: 40,
         burst_size: 64,
         drain_budget: 8,
     };
-    let ticket = harness.start_burst(&config).expect("post burst command");
+    let ticket = harness.start_burst(&config)?;
     let outcome = harness
         .consume_frames(
             (config.bursts * config.burst_size) as usize,
             Some(config.drain_budget as usize),
         )
-        .await
-        .expect("drain bursts");
-    assert_eq!(
+        .await?;
+    ensure!(
+        outcome.frames.len() == outcome.events.len(),
+        "frame/event counts align ({} vs {})",
         outcome.frames.len(),
-        outcome.events.len(),
-        "frame/event counts align"
+        outcome.events.len()
     );
-    assert_eq!(
-        outcome.frames, outcome.events,
+    ensure!(
+        outcome.frames == outcome.events,
         "bursty events maintain ordering"
     );
-    assert!(
+    ensure!(
         outcome.max_ready_depth <= FRAME_SLOT_COUNT,
-        "ready ring never exceeded slot budget"
+        "ready ring exceeded slot budget ({} > {})",
+        outcome.max_ready_depth,
+        FRAME_SLOT_COUNT
     );
-    let result = ticket.wait().await.expect("worker burst result");
-    assert_eq!(result.status, 0, "burst status");
-    let stats = result.stats.expect("burst stats");
-    assert_eq!(
-        stats.produced,
-        (config.bursts * config.burst_size) as u32,
-        "worker burst produced expected frames"
+    let result = ticket.wait().await?;
+    ensure!(result.status == 0, "burst status {}", result.status);
+    let stats = result.stats.ok_or_else(|| JsValue::from_str("missing burst stats"))?;
+    ensure!(
+        stats.produced == (config.bursts * config.burst_size),
+        "worker burst produced {} frames",
+        stats.produced
     );
-    assert_eq!(
-        stats.would_block_evt, 0,
+    ensure!(
+        stats.would_block_evt == 0,
         "bursty workload should not overflow event ring"
     );
-    harness.assert_reconciliation();
+    harness.assert_reconciliation()?;
+    Ok(())
 }
 
-#[wasm_bindgen_test]
-async fn transport_worker_backpressure_recovery() {
-    let mut harness = TransportHarness::new().await.expect("init harness");
+#[wasm_bindgen]
+pub async fn wasm_transport_worker_backpressure_recovery() -> Result<(), JsValue> {
+    let mut harness = TransportHarness::new().await?;
     let cfg = BackpressureScenario {
         frames: 4096,
         pause_ms: 25,
     };
-    let ticket = harness
-        .start_backpressure(&cfg)
-        .expect("post backpressure command");
+    let ticket = harness.start_backpressure(&cfg)?;
     TimeoutFuture::new(cfg.pause_ms).await;
     let outcome = harness
         .consume_frames(cfg.frames as usize, None)
-        .await
-        .expect("drain after pause");
-    assert_eq!(outcome.frames.len(), outcome.events.len());
-    harness.assert_reconciliation();
-    let result = ticket.wait().await.expect("worker backpressure result");
-    assert_eq!(result.status, 0, "backpressure status");
-    let stats = result.stats.expect("backpressure stats");
-    assert_eq!(
-        stats.produced, cfg.frames,
-        "worker produced requested frames"
+        .await?;
+    ensure!(
+        outcome.frames.len() == outcome.events.len(),
+        "frame/event counts align after recovery ({} vs {})",
+        outcome.frames.len(),
+        outcome.events.len()
     );
-    assert!(
+    harness.assert_reconciliation()?;
+    let result = ticket.wait().await?;
+    ensure!(result.status == 0, "backpressure status {}", result.status);
+    let stats = result
+        .stats
+        .ok_or_else(|| JsValue::from_str("missing backpressure stats"))?;
+    ensure!(
+        stats.produced == cfg.frames,
+        "worker produced {} frames (expected {})",
+        stats.produced,
+        cfg.frames
+    );
+    ensure!(
         stats.would_block_ready > 0 || stats.free_waits > 0,
         "producer should observe backpressure on ready or free rings"
     );
+    Ok(())
 }
 
 struct BurstScenario {
@@ -167,6 +198,7 @@ enum WorkerOp {
     Backpressure = 3,
 }
 
+#[allow(dead_code)]
 enum WorkerConfig {
     Flood(Box<WorkerFloodConfig>),
     Burst(Box<WorkerBurstConfig>),
@@ -183,8 +215,7 @@ impl TransportHarness {
         let buffers = TransportBuffers::new().map_err(|err| JsValue::from_str(&err.to_string()))?;
         let memory = shared_memory()?;
         let worker = spawn_worker()?;
-        let module = worker_module_buffer();
-        let init_msg = make_init_message(buffers.descriptor_ptr(), &memory, &module)?;
+        let init_msg = make_init_message(buffers.descriptor_ptr(), &memory)?;
         let ticket = WorkerTicket::new(worker.clone(), init_msg, None, None)?;
         let status = ticket.wait_status().await?;
         if status != 0 {
@@ -289,27 +320,30 @@ impl TransportHarness {
         })
     }
 
-    fn assert_reconciliation(&self) {
-        assert_eq!(
+    fn assert_reconciliation(&self) -> Result<(), JsValue> {
+        ensure!(
+            self.buffers.frame_pool.free_len() == self.buffers.frame_pool.slot_count(),
+            "all frame slots should be free (free={}, total={})",
             self.buffers.frame_pool.free_len(),
-            self.buffers.frame_pool.slot_count(),
-            "all frame slots should be free"
+            self.buffers.frame_pool.slot_count()
         );
-        assert_eq!(self.buffers.frame_pool.ready_len(), 0, "ready ring drained");
-        assert!(
+        ensure!(
+            self.buffers.frame_pool.ready_len() == 0,
+            "ready ring drained"
+        );
+        ensure!(
             self.buffers.evt_ring.consumer_peek().is_none(),
             "event ring should be empty after drain"
         );
-        assert_eq!(
-            self.buffers.audio_pool.free_len(),
-            self.buffers.audio_pool.slot_count(),
+        ensure!(
+            self.buffers.audio_pool.free_len() == self.buffers.audio_pool.slot_count(),
             "audio slots remain unused and free"
         );
-        assert_eq!(
-            self.buffers.audio_pool.ready_len(),
-            0,
+        ensure!(
+            self.buffers.audio_pool.ready_len() == 0,
             "audio ready ring should remain empty"
         );
+        Ok(())
     }
 }
 
@@ -319,6 +353,7 @@ struct DrainOutcome {
     max_ready_depth: usize,
 }
 
+#[allow(dead_code)]
 struct TransportBuffers {
     cmd_ring: MsgRing,
     evt_ring: MsgRing,
@@ -368,6 +403,7 @@ impl Drop for TransportBuffers {
     }
 }
 
+#[allow(dead_code)]
 struct WorkerRunResult {
     op: u32,
     status: i32,
@@ -451,23 +487,14 @@ fn spawn_worker() -> Result<Worker, JsValue> {
     Ok(worker)
 }
 
-fn worker_module_buffer() -> js_sys::ArrayBuffer {
-    let bytes = TRANSPORT_WORKER_WASM;
-    let array = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
-    array.copy_from(bytes);
-    array.buffer()
-}
-
 fn make_init_message(
     descriptor_ptr: u32,
     memory: &js_sys::WebAssembly::Memory,
-    module: &js_sys::ArrayBuffer,
 ) -> Result<JsValue, JsValue> {
     let msg = Object::new();
     set_u32(&msg, "op", WorkerOp::Init as u32)?;
     set_u32(&msg, "descriptorPtr", descriptor_ptr)?;
     Reflect::set(&msg, &JsValue::from_str("memory"), memory)?;
-    Reflect::set(&msg, &JsValue::from_str("module"), module)?;
     Ok(msg.into())
 }
 

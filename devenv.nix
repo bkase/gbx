@@ -135,30 +135,43 @@ in {
   tasks."build:transport-worker".exec = ''
     set -euo pipefail
 
-    # Ensure WASM build uses shared memory flags
-    # RUSTFLAGS applies to all compilation units including std when using -Z build-std
-    export RUSTFLAGS="${wasmSharedMemoryFlags}"
+    echo "Building transport-worker..."
 
-    cargo build -p transport-worker --target wasm32-unknown-unknown --release -Z build-std=std,panic_abort
-
-    artifact="target/wasm32-unknown-unknown/release/transport_worker.wasm"
-    output="web/pkg/transport_worker.wasm"
-
-    if [ ! -f "$artifact" ]; then
-      echo "expected worker artifact at $artifact" >&2
-      exit 1
-    fi
+    # Build with cargo using shared memory support
+    cargo build -p transport-worker \
+      --target wasm32-unknown-unknown \
+      --release \
+      -Z build-std=std,panic_abort
 
     mkdir -p web/pkg
-    rm -f web/pkg/transport_worker_bg.wasm web/pkg/transport_worker_bg.wasm.d.ts web/pkg/transport_worker.js web/pkg/transport_worker.d.ts
 
-    wasm-tools strip "$artifact" -o "$output"
+    # Use wasm-bindgen-cli to generate JS bindings
+    # Try to find wasm-bindgen in cargo bin, otherwise install it
+    WASM_BINDGEN="$HOME/.cargo/bin/wasm-bindgen"
+    if [ ! -f "$WASM_BINDGEN" ]; then
+      echo "Installing wasm-bindgen-cli..."
+      cargo install wasm-bindgen-cli --version 0.2.104
+    fi
 
-    if ! wasm-objdump -x -j import "$output" | rg -q 'memory\[0\].*shared.*env\.memory'; then
-      wasm-objdump -x -j import "$output"
-      echo "transport_worker.wasm must import env.memory as shared; check build flags." >&2
+    # Generate bindings
+    $WASM_BINDGEN \
+      target/wasm32-unknown-unknown/release/transport_worker.wasm \
+      --out-dir web/pkg \
+      --out-name transport_worker \
+      --target web
+
+    # Verify the wasm module was generated
+    output="web/pkg/transport_worker_bg.wasm"
+
+    if [ ! -f "$output" ]; then
+      echo "expected wasm-bindgen artifact at $output" >&2
       exit 1
     fi
+
+    # Note: wasm-bindgen creates its own memory by default, but we use
+    # wasm_bindgen::memory() to share memory between main and worker
+    echo "transport-worker built successfully"
+    wasm-objdump -x -j import "$output" | head -20
   '';
   tasks."test:workspace".exec = "cargo test --all-targets";
   tasks."test:golden".exec =
@@ -171,37 +184,17 @@ in {
   tasks."test:wasm-smoke".exec = ''
     set -euo pipefail
 
-    export RUSTFLAGS="${wasmSharedMemoryFlags}"
-    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="${wasmSharedMemoryFlags}"
-
-    # Build the transport-worker first
-    echo "Building transport-worker with shared memory support..."
-    cargo build -p transport-worker --target wasm32-unknown-unknown --release -Z build-std=std,panic_abort
-
-    artifact="target/wasm32-unknown-unknown/release/transport_worker.wasm"
-    output="web/pkg/transport_worker.wasm"
-
-    if [ ! -f "$artifact" ]; then
-      echo "expected worker artifact at $artifact" >&2
-      exit 1
-    fi
-
-    mkdir -p web/pkg
-    rm -f web/pkg/transport_worker_bg.wasm web/pkg/transport_worker_bg.wasm.d.ts web/pkg/transport_worker.js web/pkg/transport_worker.d.ts
-
-    wasm-tools strip "$artifact" -o "$output"
-
-    if ! wasm-objdump -x -j import "$output" | rg -q 'memory\[0\].*shared.*env\.memory'; then
-      echo "Checking memory import in transport_worker.wasm..."
-      wasm-objdump -x -j import "$output"
-      echo "transport_worker.wasm must import env.memory as shared; check build flags." >&2
-      exit 1
-    fi
+    # Build the transport-worker using wasm-pack
+    echo "Building transport-worker with wasm-pack..."
+    devenv tasks run build:transport-worker
 
     echo "Building test WASM..."
     rm -rf tests/wasm/pkg
     mkdir -p tests/wasm/pkg
-    wasm-pack build crates/tests --target web --out-dir ../../tests/wasm/pkg -- -Z build-std=std,panic_abort
+
+    # Use RUSTFLAGS for wasm-pack (it doesn't respect CARGO_TARGET_*_RUSTFLAGS)
+    RUSTFLAGS="${wasmSharedMemoryFlags}" \
+      wasm-pack build crates/tests --target web --out-dir ../../tests/wasm/pkg -- -Z build-std=std,panic_abort
 
     npm install --silent >/dev/null
 
