@@ -1,4 +1,10 @@
-//! Transport worker for WASM using wasm-bindgen pattern.
+//! Reusable transport worker for WASM using wasm-bindgen pattern.
+//!
+//! This crate provides app-agnostic worker functions for transport operations.
+//! It has NO dependencies on app/hub/world - it's purely about transport layer.
+//!
+//! For GBX-specific test orchestration, see the `gbx-wasm` crate which re-exports
+//! these functions and adds test entry points.
 #![allow(missing_docs)]
 
 pub use types::*;

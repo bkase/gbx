@@ -434,6 +434,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "gbx-wasm"
+version = "0.1.0"
+dependencies = [
+ "app",
+ "bytecheck",
+ "futures",
+ "gloo-timers",
+ "hub",
+ "js-sys",
+ "mock",
+ "rkyv",
+ "services-transport",
+ "transport",
+ "transport-worker",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "world",
+]
+
+[[package]]
 name = "generator"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

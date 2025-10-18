@@ -6,16 +6,21 @@
   </head>
   <body>
     <script type="module">
+      // Single WASM module contains both test functions and worker functions
       import init, {
         wasm_smoke_test,
         wasm_transport_worker_flood_frames,
         wasm_transport_worker_burst_fairness,
         wasm_transport_worker_backpressure_recovery,
-      } from './pkg/tests.js';
+      } from './pkg/transport_worker.js';
 
       async function run() {
         try {
-          await init(new URL('./pkg/tests_bg.wasm', import.meta.url));
+          // Initialize the single WASM module in the main thread
+          // This pattern matches gbx-playground: main thread inits first,
+          // then workers use the same module with shared memory
+          console.log('Main thread: Initializing transport_worker module...');
+          await init(new URL('./pkg/transport_worker_bg.wasm', import.meta.url));
           const steps = [
             ['wasm_smoke_test', wasm_smoke_test],
             ['wasm_transport_worker_flood_frames', wasm_transport_worker_flood_frames],

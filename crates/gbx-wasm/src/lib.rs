@@ -1,0 +1,20 @@
+//! Top-level WASM module for GBX.
+//!
+//! This crate serves as the single WASM artifact that contains:
+//! - Re-exported worker functions from transport-worker (reusable)
+//! - Test orchestration code (GBX-specific)
+//!
+//! Following the single-module pattern to avoid __wbindgen_start deadlocks.
+
+#![allow(missing_docs)]
+
+// Re-export all worker functions from transport-worker
+// These are the reusable, app-agnostic worker entry points
+pub use transport_worker::{
+    worker_init, worker_flood, worker_burst, worker_backpressure,
+    WorkerInitDescriptor, FloodConfig, BurstConfig, BackpressureConfig, ScenarioStats,
+};
+
+// Test orchestration - GBX-specific integration tests
+#[cfg(target_arch = "wasm32")]
+pub mod tests;

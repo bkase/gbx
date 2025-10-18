@@ -24,7 +24,6 @@ in {
     version = "2025-10-16";  # Known to work with --import-memory + --shared-memory
     components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" "rust-src" ];
     targets = [ "wasm32-unknown-unknown" ];
-    rustflags = "-D warnings -D missing_docs";
   };
 
   env = {
@@ -35,6 +34,13 @@ in {
     # Nicer output locally
     NEXTEST_HIDE_PROGRESS_BAR = "0";
   };
+
+  # Native rustflags for stricter compilation
+  # Set this manually in build commands to avoid breaking web builds
+  env.NATIVE_RUSTFLAGS = lib.concatStringsSep " " [
+    "-D" "warnings"
+    "-D" "missing_docs"
+  ];
 
   # WASM-specific rustflags for shared linear memory
   env.WASM_RUSTFLAGS = lib.concatStringsSep " " [
@@ -49,6 +55,8 @@ in {
     "-C" "link-arg=--export=__tls_align"
     "-C" "link-arg=--export=__tls_base"
     "-C" "link-arg=--max-memory=67108864"
+    "-D" "warnings"
+    "-D" "missing_docs"
   ];
 
   enterShell = ''
@@ -137,28 +145,43 @@ in {
   tasks."format:check".exec = "cargo fmt --all -- --check";
   tasks."lint:workspace".exec =
     "cargo clippy --all-targets --all-features -- -D warnings -D clippy::undocumented_unsafe_blocks";
-  tasks."build:workspace".exec = "cargo build --all-targets";
-  tasks."build:wasm".exec =
-    "cargo build --target wasm32-unknown-unknown -p app";
+  tasks."build:workspace".exec = ''
+    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
+    cargo build --all-targets
+  '';
+  tasks."build:wasm".exec = ''
+    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
+    cargo build --target wasm32-unknown-unknown -p app
+  '';
   tasks."build:transport-worker".exec = ''
     set -euo pipefail
 
     echo "Building transport-worker with wasm-pack..."
     export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
-    wasm-pack build --target web crates/transport-worker --out-dir ../../web/pkg --out-name transport_worker -- -Z build-std=std,panic_abort
+    wasm-pack build --target web crates/gbx-wasm --out-dir ../../web/pkg --out-name transport_worker -- -Z build-std=std,panic_abort
 
     echo "Verifying memory is imported..."
     wasm-tools print web/pkg/transport_worker_bg.wasm | grep -E "(import.*memory)" | head -1
     echo "✅ Memory import successful! transport-worker ready for shared memory."
   '';
-  tasks."test:workspace".exec = "cargo test --all-targets";
-  tasks."test:golden".exec =
-    "cargo test -p tests transport_schema_goldens_v1";
+  tasks."test:workspace".exec = ''
+    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
+    cargo test --all-targets
+  '';
+  tasks."test:golden".exec = ''
+    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
+    cargo test -p tests transport_schema_goldens_v1
+  '';
 
   # Tight test discipline tasks (stable API for CI)
-  tasks."test:fast".exec = "cargo nextest run --profile fast";
-  tasks."test:slow".exec =
-    "cargo nextest run --profile slow --run-ignored ignored-only --features loom";
+  tasks."test:fast".exec = ''
+    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
+    cargo nextest run --profile fast
+  '';
+  tasks."test:slow".exec = ''
+    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
+    cargo nextest run --profile slow --run-ignored ignored-only --features loom
+  '';
   tasks."test:wasm-smoke".exec = ''
     set -euo pipefail
 
@@ -166,16 +189,11 @@ in {
     echo "Building transport-worker with wasm-pack..."
     devenv tasks run build:transport-worker
 
-    echo "Building test WASM..."
+    # gbx-wasm contains both worker functions (re-exported from transport-worker) AND test orchestration
+    # So we just build it once and use those artifacts directly
+    echo "Copying gbx-wasm artifacts (transport-worker + tests) to tests/wasm/pkg..."
     rm -rf tests/wasm/pkg
     mkdir -p tests/wasm/pkg
-
-    # Use CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS for wasm-pack
-    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
-    wasm-pack build crates/tests --target web --out-dir ../../tests/wasm/pkg -- -Z build-std=std,panic_abort
-
-    # Copy transport-worker artifacts and worker.js to test directory
-    echo "Copying transport-worker artifacts to tests/wasm/pkg..."
     cp web/pkg/transport_worker.js tests/wasm/pkg/
     cp web/pkg/transport_worker_bg.wasm tests/wasm/pkg/
     cp web/pkg/transport_worker_bg.wasm.d.ts tests/wasm/pkg/ 2>/dev/null || true
@@ -184,6 +202,17 @@ in {
 
     npm install --silent >/dev/null
 
+    export WASM_TEST_PORT=4510
+    node tests/wasm_server.js &
+    SERVER_PID=$!
+    trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+
+    sleep 3
+
+    node tests/wasm_browser_test.js
+  '';
+
+  tasks."test:wasm-light".exec = ''
     export WASM_TEST_PORT=4510
     node tests/wasm_server.js &
     SERVER_PID=$!
