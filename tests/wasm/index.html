@@ -25,10 +25,12 @@
 
           for (const [name, fn] of steps) {
             try {
+              console.log(`WASM_TEST_START:${name}`);
               await fn();
               console.log(`WASM_TEST_PASS:${name}`);
             } catch (err) {
               console.error(`WASM_TEST_FAIL:${name}`, err);
+              console.error(`WASM_TEST_FAIL:${name}:message`, err.message || String(err));
               throw err;
             }
           }

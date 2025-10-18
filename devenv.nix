@@ -7,26 +7,23 @@ let
     ripgrep
     cargo-nextest
     trunk
-    wasm-pack
     wasm-tools
     wabt
     chromedriver
     python3
     rustup
+    nodejs
   ];
 
-  # Shared WASM build flags for atomics and shared memory
-  wasmSharedMemoryFlags = "-Z unstable-options -C panic=abort -C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__wasm_init_memory -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base -C link-arg=--max-memory=1073741824";
 in {
   packages = basePkgs;
 
   languages.rust = {
     enable = true;
     channel = "nightly";
+    version = "2025-10-16";  # Known to work with --import-memory + --shared-memory
     components = [ "rustc" "cargo" "clippy" "rustfmt" "rust-analyzer" "rust-src" ];
     targets = [ "wasm32-unknown-unknown" ];
-    # Strict compilation: warnings as errors, require docs on public items
-    # For native builds, use strict warnings
     rustflags = "-D warnings -D missing_docs";
   };
 
@@ -37,11 +34,22 @@ in {
     PROPTEST_TIMEOUT = "2000"; # ms for the whole property test
     # Nicer output locally
     NEXTEST_HIDE_PROGRESS_BAR = "0";
-    # WASM build flags: shared memory with atomics
-    # These apply to wasm32-unknown-unknown target builds
-    CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS = wasmSharedMemoryFlags;
-    WASM_RUSTFLAGS = wasmSharedMemoryFlags;
   };
+
+  # WASM-specific rustflags for shared linear memory
+  env.WASM_RUSTFLAGS = lib.concatStringsSep " " [
+    "-Z" "unstable-options"
+    "-C" "panic=immediate-abort"
+    "-C" "target-feature=+atomics,+bulk-memory,+mutable-globals"
+    "-C" "link-arg=--shared-memory"
+    "-C" "link-arg=--import-memory"
+    "-C" "link-arg=--export=__wasm_init_tls"
+    "-C" "link-arg=--export=__wasm_init_memory"
+    "-C" "link-arg=--export=__tls_size"
+    "-C" "link-arg=--export=__tls_align"
+    "-C" "link-arg=--export=__tls_base"
+    "-C" "link-arg=--max-memory=67108864"
+  ];
 
   enterShell = ''
     # Ensure wasm-pack is installed via cargo
@@ -135,43 +143,13 @@ in {
   tasks."build:transport-worker".exec = ''
     set -euo pipefail
 
-    echo "Building transport-worker..."
+    echo "Building transport-worker with wasm-pack..."
+    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
+    wasm-pack build --target web crates/transport-worker --out-dir ../../web/pkg --out-name transport_worker -- -Z build-std=std,panic_abort
 
-    # Build with cargo using shared memory support
-    cargo build -p transport-worker \
-      --target wasm32-unknown-unknown \
-      --release \
-      -Z build-std=std,panic_abort
-
-    mkdir -p web/pkg
-
-    # Use wasm-bindgen-cli to generate JS bindings
-    # Try to find wasm-bindgen in cargo bin, otherwise install it
-    WASM_BINDGEN="$HOME/.cargo/bin/wasm-bindgen"
-    if [ ! -f "$WASM_BINDGEN" ]; then
-      echo "Installing wasm-bindgen-cli..."
-      cargo install wasm-bindgen-cli --version 0.2.104
-    fi
-
-    # Generate bindings
-    $WASM_BINDGEN \
-      target/wasm32-unknown-unknown/release/transport_worker.wasm \
-      --out-dir web/pkg \
-      --out-name transport_worker \
-      --target web
-
-    # Verify the wasm module was generated
-    output="web/pkg/transport_worker_bg.wasm"
-
-    if [ ! -f "$output" ]; then
-      echo "expected wasm-bindgen artifact at $output" >&2
-      exit 1
-    fi
-
-    # Note: wasm-bindgen creates its own memory by default, but we use
-    # wasm_bindgen::memory() to share memory between main and worker
-    echo "transport-worker built successfully"
-    wasm-objdump -x -j import "$output" | head -20
+    echo "Verifying memory is imported..."
+    wasm-tools print web/pkg/transport_worker_bg.wasm | grep -E "(import.*memory)" | head -1
+    echo "✅ Memory import successful! transport-worker ready for shared memory."
   '';
   tasks."test:workspace".exec = "cargo test --all-targets";
   tasks."test:golden".exec =
@@ -192,9 +170,17 @@ in {
     rm -rf tests/wasm/pkg
     mkdir -p tests/wasm/pkg
 
-    # Use RUSTFLAGS for wasm-pack (it doesn't respect CARGO_TARGET_*_RUSTFLAGS)
-    RUSTFLAGS="${wasmSharedMemoryFlags}" \
-      wasm-pack build crates/tests --target web --out-dir ../../tests/wasm/pkg -- -Z build-std=std,panic_abort
+    # Use CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS for wasm-pack
+    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
+    wasm-pack build crates/tests --target web --out-dir ../../tests/wasm/pkg -- -Z build-std=std,panic_abort
+
+    # Copy transport-worker artifacts and worker.js to test directory
+    echo "Copying transport-worker artifacts to tests/wasm/pkg..."
+    cp web/pkg/transport_worker.js tests/wasm/pkg/
+    cp web/pkg/transport_worker_bg.wasm tests/wasm/pkg/
+    cp web/pkg/transport_worker_bg.wasm.d.ts tests/wasm/pkg/ 2>/dev/null || true
+    cp web/pkg/transport_worker.d.ts tests/wasm/pkg/ 2>/dev/null || true
+    cp web/worker.js tests/wasm/pkg/
 
     npm install --silent >/dev/null
 

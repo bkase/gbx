@@ -26,6 +26,16 @@ pub struct MsgRingLayout {
     pub capacity_bytes: u32,
 }
 
+/// Layout metadata for a coalescing mailbox.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MailboxLayout {
+    /// Header containing cursors and envelope metadata.
+    pub header: Region,
+    /// Data region storing the payload bytes.
+    pub data: Region,
+}
+
 /// Layout metadata for an index ring (free/ready pools).
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]

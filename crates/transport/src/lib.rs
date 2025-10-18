@@ -7,6 +7,7 @@
 //! * [`TransportError`] – lightweight error surface for allocation/config failures.
 
 mod error;
+mod mailbox;
 mod msg_ring;
 mod region;
 pub mod schema;
@@ -14,6 +15,7 @@ mod slot_pool;
 pub mod wasm;
 
 pub use error::{TransportError, TransportResult};
+pub use mailbox::{Mailbox, MailboxRecord, MailboxSend};
 pub use msg_ring::{Envelope, MsgRing, ProducerGrant, Record};
 pub use region::{SharedRegion, Uninit, Zeroed};
 pub use schema::*;

@@ -15,9 +15,7 @@ use transport_worker::types::{
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{Blob, BlobPropertyBag, MessageEvent, Url, Worker, WorkerOptions, WorkerType};
-
-const WORKER_SOURCE: &str = include_str!("../../../web/worker.js");
+use web_sys::{MessageEvent, Worker, WorkerOptions, WorkerType};
 
 const CMD_RING_CAPACITY: usize = 32 * 1024;
 const EVT_RING_CAPACITY: usize = 512 * 1024;
@@ -65,18 +63,20 @@ pub async fn wasm_transport_worker_flood_frames() -> Result<(), JsValue> {
     let mut harness = TransportHarness::new().await?;
     let ticket = harness.start_flood(10_000)?;
     let outcome = harness.consume_frames(10_000, None).await?;
-    ensure_eq!(
-        outcome.frames.len(),
-        10_000,
-        "all frames should drain"
-    );
+    ensure_eq!(outcome.frames.len(), 10_000, "all frames should drain");
     ensure!(
         outcome.frames == outcome.events,
         "event ring should mirror ready frames"
     );
     let result = ticket.wait().await?;
-    ensure!(result.status == 0, "worker flood result status {}", result.status);
-    let stats = result.stats.ok_or_else(|| JsValue::from_str("missing flood stats"))?;
+    ensure!(
+        result.status == 0,
+        "worker flood result status {}",
+        result.status
+    );
+    let stats = result
+        .stats
+        .ok_or_else(|| JsValue::from_str("missing flood stats"))?;
     ensure!(
         stats.produced as usize == 10_000,
         "worker produced {} frames (expected 10_000)",
@@ -127,7 +127,9 @@ pub async fn wasm_transport_worker_burst_fairness() -> Result<(), JsValue> {
     );
     let result = ticket.wait().await?;
     ensure!(result.status == 0, "burst status {}", result.status);
-    let stats = result.stats.ok_or_else(|| JsValue::from_str("missing burst stats"))?;
+    let stats = result
+        .stats
+        .ok_or_else(|| JsValue::from_str("missing burst stats"))?;
     ensure!(
         stats.produced == (config.bursts * config.burst_size),
         "worker burst produced {} frames",
@@ -150,9 +152,7 @@ pub async fn wasm_transport_worker_backpressure_recovery() -> Result<(), JsValue
     };
     let ticket = harness.start_backpressure(&cfg)?;
     TimeoutFuture::new(cfg.pause_ms).await;
-    let outcome = harness
-        .consume_frames(cfg.frames as usize, None)
-        .await?;
+    let outcome = harness.consume_frames(cfg.frames as usize, None).await?;
     ensure!(
         outcome.frames.len() == outcome.events.len(),
         "frame/event counts align after recovery ({} vs {})",
@@ -474,16 +474,11 @@ fn shared_memory() -> Result<js_sys::WebAssembly::Memory, JsValue> {
 }
 
 fn spawn_worker() -> Result<Worker, JsValue> {
-    let sources = js_sys::Array::new();
-    sources.push(&JsValue::from_str(WORKER_SOURCE));
-    let bag = BlobPropertyBag::new();
-    bag.set_type("application/javascript");
-    let blob = Blob::new_with_str_sequence_and_options(&sources, &bag)?;
-    let url = Url::create_object_url_with_blob(&blob)?;
+    // Load worker from server instead of blob to allow ES6 imports to work
+    let worker_url = "./pkg/worker.js";
     let options = WorkerOptions::new();
     options.set_type(WorkerType::Module);
-    let worker = Worker::new_with_options(&url, &options)?;
-    Url::revoke_object_url(&url)?;
+    let worker = Worker::new_with_options(worker_url, &options)?;
     Ok(worker)
 }
 
