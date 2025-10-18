@@ -38,18 +38,40 @@ Ultra-high-performance, Elm-inspired Game Boy emulator built around SIMD kernels
 
 ```
 crates/
-  hub/         # Services hub, submit policies, shared scheduling traits
-  world/       # Message enums, reducers, and world state
-  app/         # scheduler, priority queues, intent/report loop
-  services/    # non-blocking service stubs (kernel, gpu, audio, fs)
-  transport/   # utility queues and shared primitives
-  mock/        # mock services for tests
-  tests/       # integration-style tests
+  hub/              # Services hub, submit policies, shared scheduling traits
+  world/            # Message enums, reducers, and world state
+  app/              # scheduler, priority queues, intent/report loop
+  services/         # non-blocking service stubs (kernel, gpu, audio, fs)
+  transport/        # utility queues and shared primitives
+  transport-worker/ # Reusable WASM worker functions (app-agnostic)
+  gbx-wasm/         # Top-level WASM module (re-exports worker + adds tests)
+  mock/             # mock services for tests
+  tests/            # native integration tests
 docs/
   architecture.md  # authoritative design reference
   scaffold.md      # devenv tasks + engineering notes
 web/               # WASM host, Trunk config (future UI runtime)
 ```
+
+### WASM Architecture: Single Module Pattern
+
+**Critical**: We use a **single WASM module** (`gbx-wasm`) with multiple `wasm_bindgen` entry points for both the main thread and workers. This avoids the `__wbindgen_start` deadlock that occurs with multiple separate WASM modules.
+
+**Why**: wasm-bindgen's `__wbindgen_start` function performs threading initialization including atomic wait operations. When a worker tries to initialize a separate WASM module for the first time, these atomic waits deadlock because they expect a coordinator thread that doesn't exist in the worker-only context.
+
+**Pattern** (inspired by [gbx-playground](https://github.com/bkase/gbx-playground)):
+- Main thread calls `await init()` to initialize the module (runs `__wbindgen_start` in main context)
+- Workers import the same module and call `await init(undefined, sharedMemory)` to re-initialize with shared memory
+- **`transport-worker`** crate: Reusable, app-agnostic worker functions (no dependencies on app/hub/world)
+- **`gbx-wasm`** crate: Top-level WASM module that re-exports `transport-worker` functions and adds GBX-specific test orchestration
+
+**DO NOT** create separate WASM artifacts for workers and tests - this will cause initialization hangs. Keep all WASM entry points in the single `gbx-wasm` module.
+
+**Generalization**: To use `transport-worker` in your own project:
+1. Create your own top-level WASM crate (like `gbx-wasm`)
+2. Add `transport-worker` as a dependency
+3. Re-export its worker functions: `pub use transport_worker::{worker_init, worker_flood, ...};`
+4. Add your own `#[wasm_bindgen]` entry points for your app-specific functionality
 
 ## Development Workflow
 

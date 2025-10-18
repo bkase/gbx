@@ -1,5 +1,5 @@
 [package]
-name = "tests"
+name = "gbx-wasm"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,20 +7,29 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Core worker functionality (reusable, no app/hub dependencies)
+transport-worker = { path = "../transport-worker" }
+transport = { path = "../transport" }
+
+# GBX-specific dependencies for test orchestration
 app = { path = "../app" }
 hub = { path = "../hub" }
 mock = { path = "../mock" }
 world = { path = "../world" }
-bytecheck = "0.6"
-rkyv = { version = "0.7", features = ["validation"] }
-transport = { path = "../transport" }
-transport-worker = { path = "../transport-worker" }
 services-transport = { path = "../services/services-transport" }
-wasm-bindgen = "0.2"
+
+# WASM bindings
+wasm-bindgen = "0.2.104"
 wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
+js-sys = "0.3.81"
 futures = "0.3"
 gloo-timers = { version = "0.2", features = ["futures"] }
+
+# Serialization for transport
+bytecheck = "0.6"
+rkyv = { version = "0.7", features = ["validation"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = [
   "Blob",
   "BlobPropertyBag",
@@ -32,3 +41,6 @@ web-sys = { version = "0.3", features = [
   "Url",
   "console",
 ] }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

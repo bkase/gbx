@@ -1,0 +1,12 @@
+[package]
+name = "transport-codecs"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+rkyv = { version = "0.7", features = ["validation"] }
+thiserror = { workspace = true }
+hub = { path = "../hub" }
+transport = { path = "../transport" }
+transport-fabric = { path = "../transport-fabric" }
+world = { path = "../world" }

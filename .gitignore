@@ -19,3 +19,6 @@ target/
 # Web build output (future Trunk dist)
 web/dist/
 web/pkg/transport_worker.wasm
+tests/wasm/pkg/
+
+node_modules/

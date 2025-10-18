@@ -75,6 +75,13 @@ pub struct SharedRegion<State> {
     _marker: PhantomData<State>,
 }
 
+// SAFETY: Shared regions represent pointers into shared memory that remain valid across threads
+// as long as the owning `SharedRegion` is alive. Access is mediated through higher-level
+// synchronization primitives (mutexes, atomics), so it is safe to move between threads.
+unsafe impl<State> Send for SharedRegion<State> {}
+// SAFETY: Same reasoning as Send - access is mediated through synchronization primitives.
+unsafe impl<State> Sync for SharedRegion<State> {}
+
 #[derive(Clone, Copy)]
 enum InitKind {
     Zeroed,

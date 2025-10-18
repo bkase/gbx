@@ -1,3 +1,5 @@
+import init, { worker_init, worker_flood, worker_burst, worker_backpressure } from './transport_worker.js';
+
 const Op = {
   Init: 0,
   Flood: 1,
@@ -5,120 +7,57 @@ const Op = {
   Backpressure: 3,
 };
 
-let exportsRef = null;
-let readyPromise = null;
-let sharedMemory = null;
+let initialized = false;
 
-function ensureEnvironmentReady(memory) {
-  if (!self.crossOriginIsolated) {
-    console.error("transport worker requires crossOriginIsolated=true");
-    postMessage({ op: Op.Init, status: -90 });
-    return false;
-  }
-
-  if (!(memory instanceof WebAssembly.Memory)) {
-    console.error("transport worker expected WebAssembly.Memory import");
-    postMessage({ op: Op.Init, status: -91 });
-    return false;
-  }
-
-  const buffer = memory.buffer;
-  if (!(buffer instanceof SharedArrayBuffer)) {
-    console.error("transport worker memory must be backed by SharedArrayBuffer");
-    postMessage({ op: Op.Init, status: -92 });
-    return false;
-  }
-
-  return true;
-}
-
-self.addEventListener("message", (event) => {
+self.onmessage = async (event) => {
   const data = event.data;
-  switch (data.op >>> 0) {
-    case Op.Init:
-      handleInit(data);
-      break;
-    case Op.Flood:
-      handleRun(Op.Flood, "worker_flood", data);
-      break;
-    case Op.Burst:
-      handleRun(Op.Burst, "worker_burst", data);
-      break;
-    case Op.Backpressure:
-      handleRun(Op.Backpressure, "worker_backpressure", data);
-      break;
-    default:
-      postMessage({ op: data.op, status: -42 });
-  }
-});
+  const op = data.op >>> 0;
+  console.log(`Worker onmessage, op=${op}`);
 
-function handleInit(data) {
-  const descriptorPtr = data.descriptorPtr >>> 0;
-  sharedMemory = data.memory;
-  const moduleBytes = data.module;
-
-  if (!ensureEnvironmentReady(sharedMemory)) {
-    return;
-  }
-
-  readyPromise = instantiate(moduleBytes, sharedMemory)
-    .then((exports) => exports.worker_init(descriptorPtr))
-    .then((status) => {
-      postMessage({ op: Op.Init, status });
-    })
-    .catch((err) => {
-      console.error("transport worker init failed", err);
-      postMessage({ op: Op.Init, status: -1 });
-    });
-}
-
-function handleRun(op, exportName, data) {
-  if (!readyPromise) {
-    postMessage({ op, status: -3 });
-    return;
-  }
-  const configPtr = data.configPtr >>> 0;
-  const statsPtr = data.statsPtr >>> 0;
-  readyPromise
-    .then((status) => {
-      if (typeof status === "number" && status !== 0) {
-        return status;
+  try {
+    if (op === Op.Init) {
+      const { memory, descriptorPtr } = data;
+      console.log(`Worker: Init op, initialized=${initialized}, descriptorPtr=${descriptorPtr}`);
+      if (!initialized) {
+        console.log("Worker: calling await init(undefined, memory)");
+        await init(undefined, memory);
+        initialized = true;
+        console.log("Worker: init complete!");
       }
-      const exports = exportsRef;
-      const fn = exports && exports[exportName];
-      if (typeof fn !== "function") {
-        return -4;
+      console.log("Worker: calling worker_init");
+      const status = worker_init(descriptorPtr >>> 0);
+      console.log(`Worker: worker_init status=${status}`);
+      postMessage({ op, status });
+    } else {
+      if (!initialized) {
+        postMessage({ op, status: -3 });
+        return;
       }
-      return fn(configPtr, statsPtr);
-    })
-    .then((status) => {
-      postMessage({ op, status: status | 0 });
-    })
-    .catch((err) => {
-      console.error("transport worker run failed", err);
-      postMessage({ op, status: -5 });
-    });
-}
 
-async function instantiate(moduleBytes, memory) {
-  if (exportsRef) {
-    return exportsRef;
-  }
-  const source = toBufferSource(moduleBytes);
-  const { instance } = await WebAssembly.instantiate(source, {
-    env: { memory },
-  });
-  exportsRef = instance.exports;
-  return exportsRef;
-}
+      const configPtr = data.configPtr >>> 0;
+      const statsPtr = data.statsPtr >>> 0;
 
-function toBufferSource(moduleBytes) {
-  if (moduleBytes instanceof ArrayBuffer) {
-    return moduleBytes;
+      let workerFn;
+      switch (op) {
+        case Op.Flood:
+          workerFn = worker_flood;
+          break;
+        case Op.Burst:
+          workerFn = worker_burst;
+          break;
+        case Op.Backpressure:
+          workerFn = worker_backpressure;
+          break;
+        default:
+          postMessage({ op, status: -42 });
+          return;
+      }
+
+      const status = workerFn(configPtr, statsPtr);
+      postMessage({ op, status });
+    }
+  } catch (err) {
+    console.error("Worker error:", err);
+    postMessage({ op, status: -99 });
   }
-  if (ArrayBuffer.isView(moduleBytes)) {
-    const { buffer, byteOffset, byteLength } = moduleBytes;
-    return buffer.slice(byteOffset, byteOffset + byteLength);
-  }
-  throw new TypeError("unexpected module payload");
-}
+};

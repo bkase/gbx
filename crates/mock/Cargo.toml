@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 hub = { path = "../hub" }
 world = { path = "../world" }
+services-kernel = { path = "../services/kernel" }
+services-gpu = { path = "../services/gpu" }
+services-audio = { path = "../services/audio" }
+services-fs = { path = "../services/fs" }

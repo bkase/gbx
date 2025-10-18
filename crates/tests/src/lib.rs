@@ -14,6 +14,7 @@ mod tests {
     use app::Scheduler;
     use hub::{Intent, IntentPriority};
     use mock::{make_hub, make_hub_with_capacities};
+    use services_transport::TransportServices;
     use std::sync::Arc;
     use world::World;
 
@@ -113,5 +114,12 @@ mod tests {
 
         // Just verify the system still works after heavy load
         assert!(scheduler.world().rom_loaded());
+    }
+
+    #[test]
+    fn transport_services_build_smoke() {
+        let services = TransportServices::new().expect("build transport services");
+        let _worker = services.worker;
+        let _hub = services.hub;
     }
 }

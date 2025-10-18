@@ -9,7 +9,7 @@ use futures::channel::oneshot;
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Object, Reflect};
 use transport::{Envelope, MsgRing, Record, SlotPool, SlotPoolConfig, SlotPop, TransportError};
-use transport_worker::types::{
+use transport_worker::{
     BackpressureConfig as WorkerBackpressureConfig, BurstConfig as WorkerBurstConfig,
     FloodConfig as WorkerFloodConfig, ScenarioStats, WorkerInitDescriptor,
 };
