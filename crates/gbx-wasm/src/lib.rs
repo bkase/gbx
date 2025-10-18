@@ -11,8 +11,8 @@
 // Re-export all worker functions from transport-worker
 // These are the reusable, app-agnostic worker entry points
 pub use transport_worker::{
-    worker_init, worker_flood, worker_burst, worker_backpressure,
-    WorkerInitDescriptor, FloodConfig, BurstConfig, BackpressureConfig, ScenarioStats,
+    worker_backpressure, worker_burst, worker_flood, worker_init, BackpressureConfig, BurstConfig,
+    FloodConfig, ScenarioStats, WorkerInitDescriptor,
 };
 
 // Test orchestration - GBX-specific integration tests

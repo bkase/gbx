@@ -5,11 +5,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
 
+use rkyv::{api::high::access, api::high::to_bytes, rancor::Error};
 use transport::{Envelope, MsgRing, SlotPool, SlotPoolConfig, SlotPop, SlotPush};
-
-// For in-place rkyv serialization
-use rkyv::ser::serializers::WriteSerializer;
-use std::io::{Cursor, Write};
 
 // Lane identifier for doorbell events
 #[repr(u8)]
@@ -21,7 +18,7 @@ enum Lane {
 
 // Test message for rkyv end-to-end validation
 #[derive(rkyv::Archive, rkyv::Serialize, Debug, PartialEq, Eq, Clone, Copy)]
-#[archive(check_bytes)]
+#[rkyv(bytecheck())]
 struct TestMessage {
     seq: u32,
     slot_idx: u32,
@@ -683,7 +680,7 @@ fn native_transport_rkyv_end_to_end() {
                 }
             }
 
-            // Serialize TestMessage with rkyv using two-pass in-place pattern
+            // Serialize TestMessage with rkyv and send it into the event ring
             let msg = TestMessage {
                 seq,
                 slot_idx,
@@ -691,27 +688,9 @@ fn native_transport_rkyv_end_to_end() {
                 checksum: seq.wrapping_mul(0x9E3779B9),
             };
 
-            // Pass 1: Measure exact size needed
-            struct Counting {
-                bytes: usize,
-            }
-            impl Write for Counting {
-                fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-                    self.bytes += b.len();
-                    Ok(b.len())
-                }
-                fn flush(&mut self) -> std::io::Result<()> {
-                    Ok(())
-                }
-            }
-            let need = {
-                let mut counter = Counting { bytes: 0 };
-                let mut ser = WriteSerializer::new(&mut counter);
-                rkyv::ser::Serializer::serialize_value(&mut ser, &msg).unwrap();
-                counter.bytes
-            };
+            let bytes = to_bytes::<Error>(&msg).expect("serialize test message");
+            let need = bytes.len();
 
-            // Pass 2: Reserve and serialize directly into the grant
             loop {
                 let committed = producer.evt_ring.with_mut(|ring| {
                     if let Some(mut grant) = ring.try_reserve(need) {
@@ -721,12 +700,11 @@ fn native_transport_rkyv_end_to_end() {
                             flags: 0,
                         });
 
-                        let mut cursor = Cursor::new(grant.payload());
-                        let mut ser = WriteSerializer::new(&mut cursor);
-                        rkyv::ser::Serializer::serialize_value(&mut ser, &msg).unwrap();
-                        let written = cursor.position() as usize;
-                        assert_eq!(written, need, "serialization size mismatch");
-                        grant.commit(written);
+                        {
+                            let payload = grant.payload();
+                            payload[..need].copy_from_slice(bytes.as_ref());
+                        }
+                        grant.commit(need);
                         true
                     } else {
                         false
@@ -756,26 +734,15 @@ fn native_transport_rkyv_end_to_end() {
                                     "envelope version mismatch"
                                 );
 
-                                // Validate and deserialize rkyv message directly from aligned slice
-                                #[cfg(debug_assertions)]
-                                {
-                                    rkyv::check_archived_root::<TestMessage>(record.payload)
-                                        .expect("rkyv validation failed");
-                                }
-
-                                #[cfg(not(debug_assertions))]
                                 let archived =
-                                    unsafe { rkyv::archived_root::<TestMessage>(record.payload) };
-                                #[cfg(debug_assertions)]
-                                let archived =
-                                    rkyv::check_archived_root::<TestMessage>(record.payload)
+                                    access::<rkyv::Archived<TestMessage>, Error>(record.payload)
                                         .expect("rkyv validation failed");
 
                                 let result = (
                                     record.envelope,
-                                    archived.seq,
-                                    archived.frame_id,
-                                    archived.checksum,
+                                    archived.seq.to_native(),
+                                    archived.frame_id.to_native(),
+                                    archived.checksum.to_native(),
                                 );
 
                                 ring.consumer_pop_advance();

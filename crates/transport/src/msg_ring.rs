@@ -572,8 +572,8 @@ mod tests {
     //! Unit coverage for the single-producer/single-consumer ring.
     use super::*;
     use rand::prelude::*;
+    use rkyv::{api::high::access, api::high::to_bytes, rancor::Error};
     use std::collections::VecDeque;
-    use std::io::{Cursor, Write};
 
     fn ring(capacity: usize) -> MsgRing {
         MsgRing::new(capacity, Envelope::new(0x11, 1)).expect("create ring")
@@ -591,7 +591,7 @@ mod tests {
     }
 
     #[derive(rkyv::Archive, rkyv::Serialize, Debug, PartialEq, Eq, Clone, Copy)]
-    #[archive(check_bytes)]
+    #[rkyv(bytecheck())]
     #[repr(u8)]
     enum SampleRep {
         Ping { value: u32 },
@@ -723,8 +723,6 @@ mod tests {
     /// Serialization test: rkyv archives are written in-place and validate on readback.
     #[test]
     fn rkyv_round_trip() {
-        use rkyv::ser::Serializer;
-
         let mut ring = ring(256);
         let mut expected = VecDeque::<SampleRep>::new();
 
@@ -734,29 +732,8 @@ mod tests {
             } else {
                 SampleRep::Pong { value }
             };
-
-            #[derive(Default)]
-            struct CountingWriter {
-                bytes: usize,
-            }
-
-            impl Write for CountingWriter {
-                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                    self.bytes += buf.len();
-                    Ok(buf.len())
-                }
-
-                fn flush(&mut self) -> std::io::Result<()> {
-                    Ok(())
-                }
-            }
-
-            let need = {
-                let mut writer = CountingWriter::default();
-                let mut serializer = rkyv::ser::serializers::WriteSerializer::new(&mut writer);
-                serializer.serialize_value(&rep).unwrap();
-                writer.bytes
-            };
+            let bytes = to_bytes::<Error>(&rep).expect("serialize sample rep");
+            let need = bytes.len();
 
             let mut grant = loop {
                 if let Some(grant) = ring.try_reserve(need) {
@@ -765,15 +742,11 @@ mod tests {
                 consume_rep(&mut ring, &mut expected);
             };
 
-            let written = {
+            {
                 let payload = grant.payload();
-                let mut cursor = Cursor::new(payload);
-                let mut serializer = rkyv::ser::serializers::WriteSerializer::new(&mut cursor);
-                serializer.serialize_value(&rep).unwrap();
-                cursor.position() as usize
-            };
-            assert_eq!(written, need);
-            grant.commit(written);
+                payload[..need].copy_from_slice(bytes.as_ref());
+            }
+            grant.commit(need);
             expected.push_back(rep);
         }
 
@@ -784,19 +757,14 @@ mod tests {
     fn consume_rep(ring: &mut MsgRing, expected: &mut VecDeque<SampleRep>) -> bool {
         if let Some(record) = ring.consumer_peek() {
             let expected_rep = expected.pop_front().expect("expected sample rep");
-            #[cfg(debug_assertions)]
-            {
-                rkyv::check_archived_root::<SampleRep>(record.payload).unwrap();
-            }
-            // SAFETY: Payload slices originate from the producer writing `SampleRep` via rkyv; the
-            // debug assertion above also validates the archive layout.
-            let archived = unsafe { rkyv::archived_root::<SampleRep>(record.payload) };
+            let archived =
+                access::<ArchivedSample, Error>(record.payload).expect("validate sample rep");
             match (archived, expected_rep) {
                 (ArchivedSample::Ping { value }, SampleRep::Ping { value: expected }) => {
-                    assert_eq!(*value, expected);
+                    assert_eq!(value.to_native(), expected);
                 }
                 (ArchivedSample::Pong { value }, SampleRep::Pong { value: expected }) => {
-                    assert_eq!(*value, expected);
+                    assert_eq!(value.to_native(), expected);
                 }
                 _ => panic!("mismatched variant during round trip"),
             }

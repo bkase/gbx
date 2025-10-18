@@ -2,15 +2,16 @@
 
 use bytecheck::CheckBytes;
 use rkyv::{
-    ser::serializers::AllocSerializer, validation::validators::DefaultValidator, AlignedVec,
+    api::high::{access, to_bytes, HighSerializer, HighValidator},
+    rancor::Error,
+    ser::allocator::ArenaHandle,
+    util::AlignedVec,
     Archive, Serialize,
 };
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use transport::schema::*;
-
-const SCRATCH: usize = 256;
 
 #[test]
 fn transport_schema_goldens_v1() {
@@ -103,20 +104,20 @@ fn transport_schema_goldens_v1() {
 fn assert_golden<T>(stem: &str, value: &T)
 where
     T: Archive,
-    T: Serialize<AllocSerializer<SCRATCH>>,
-    for<'a> T::Archived: CheckBytes<DefaultValidator<'a>>,
+    T: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, Error>>,
+    for<'a> T::Archived: CheckBytes<HighValidator<'a, Error>>,
 {
     let bytes = serialize(value);
-    rkyv::check_archived_root::<T>(&bytes).expect("byte validation failed");
+    access::<T::Archived, Error>(&bytes).expect("byte validation failed");
     verify_or_update(stem, bytes.as_ref());
 }
 
 fn serialize<T>(value: &T) -> AlignedVec
 where
     T: Archive,
-    T: Serialize<AllocSerializer<SCRATCH>>,
+    T: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, Error>>,
 {
-    rkyv::to_bytes::<_, SCRATCH>(value).expect("serialize value")
+    to_bytes::<Error>(value).expect("serialize value")
 }
 
 fn verify_or_update(stem: &str, bytes: &[u8]) {

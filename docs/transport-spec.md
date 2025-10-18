@@ -44,7 +44,7 @@ Got it — here’s the **end-to-end, M1-scoped engineering doc** for **(3) SAB 
 
 ### 1.2 Serialization
 
-✅ **rkyv** archived payloads in MsgRing records (+ `bytecheck` via `#[archive(check_bytes)]` in debug/CI).
+✅ **rkyv** archived payloads in MsgRing records (+ `bytecheck` via `#[rkyv(bytecheck())]` in debug/CI).
 ABI stability enforced with **golden archives** and an envelope **`ver`** byte.
 
 ### 1.3 Concurrency model
@@ -154,48 +154,25 @@ impl MsgRing {
 **rkyv usage (example):**
 
 ```rust
-use rkyv::ser::{Serializer, serializers::WriteSerializer};
-use std::io::Cursor;
+use rkyv::{
+  api::high::{access, to_bytes},
+  rancor::Error,
+  Archive,
+};
 
-#[derive(Default)]
-struct CountingWriter {
-  bytes: usize,
-}
-
-impl std::io::Write for CountingWriter {
-  fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-    self.bytes += buf.len();
-    Ok(buf.len())
-  }
-
-  fn flush(&mut self) -> std::io::Result<()> {
-    Ok(())
-  }
-}
+type ArchivedKernelRep = <KernelRep as Archive>::Archived;
 
 fn send_rep(rep: &KernelRep, ring: &mut MsgRing) {
-  // Pass 1: measure archived size.
-  let mut counting = CountingWriter::default();
-  WriteSerializer::new(&mut counting).serialize_value(rep).unwrap();
-  let need = counting.bytes;
+  let bytes = to_bytes::<Error>(rep).expect("serialize rep");
+  let need = bytes.len();
 
-  // Pass 2: write directly into the reserved payload.
   let mut grant = ring.try_reserve(need).expect("ring would block");
-  let written = {
-    let payload = grant.payload();
-    let mut cursor = Cursor::new(payload);
-    WriteSerializer::new(&mut cursor).serialize_value(rep).unwrap();
-    cursor.position() as usize
-  };
-  assert_eq!(written, need);
-  grant.commit(written);
+  grant.payload()[..need].copy_from_slice(bytes.as_ref());
+  grant.commit(need);
 }
 
-fn recv_rep(record: Record<'_>) -> Option<rkyv::Archived<KernelRep>> {
-  #[cfg(debug_assertions)]
-  { rkyv::check_archived_root::<KernelRep>(record.payload).ok() }
-  #[cfg(not(debug_assertions))]
-  { Some(unsafe { rkyv::archived_root::<KernelRep>(record.payload) }) }
+fn recv_rep(record: Record<'_>) -> Option<&ArchivedKernelRep> {
+  access::<ArchivedKernelRep, Error>(record.payload).ok()
 }
 ```
 

@@ -11,8 +11,8 @@ app = { path = "../app" }
 hub = { path = "../hub" }
 mock = { path = "../mock" }
 world = { path = "../world" }
-bytecheck = "0.6"
-rkyv = { version = "0.7", features = ["validation"] }
+bytecheck = "0.8"
+rkyv = { version = "0.8", features = ["bytecheck"] }
 transport = { path = "../transport" }
 transport-worker = { path = "../transport-worker" }
 services-transport = { path = "../services/services-transport" }

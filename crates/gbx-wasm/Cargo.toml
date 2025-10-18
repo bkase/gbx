@@ -26,8 +26,8 @@ futures = "0.3"
 gloo-timers = { version = "0.2", features = ["futures"] }
 
 # Serialization for transport
-bytecheck = "0.6"
-rkyv = { version = "0.7", features = ["validation"] }
+bytecheck = "0.8"
+rkyv = { version = "0.8", features = ["bytecheck"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = [

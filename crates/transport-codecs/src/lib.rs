@@ -7,6 +7,14 @@
 #![allow(missing_docs)]
 
 use hub::SubmitPolicy;
+use rkyv::{
+    api::high::{access, to_bytes, HighSerializer, HighValidator},
+    bytecheck::CheckBytes,
+    rancor::Error,
+    ser::allocator::ArenaHandle,
+    util::AlignedVec,
+    Archive, Serialize,
+};
 use transport::schema::*;
 use transport::Envelope;
 use transport_fabric::{Codec, Encoded, FabricError, FabricResult};
@@ -62,7 +70,7 @@ impl Codec for KernelCodec {
                     ArchivedTickPurposeV1::Display => TickPurpose::Display,
                     ArchivedTickPurposeV1::Exploration => TickPurpose::Exploration,
                 },
-                budget: tick.budget,
+                budget: tick.budget.to_native(),
             }),
             ArchivedKernelCmdV1::LoadRom(load) => Ok(KernelCmd::LoadRom {
                 group: 0,
@@ -110,13 +118,13 @@ impl Codec for KernelCodec {
             },
             ArchivedKernelRepV1::LaneFrame { lane, frame_id } => KernelRep::LaneFrame {
                 group: 0,
-                lane: *lane,
+                lane: lane.to_native(),
                 span: default_frame_span(),
-                frame_id: *frame_id,
+                frame_id: frame_id.to_native(),
             },
             ArchivedKernelRepV1::RomLoaded { bytes_len } => KernelRep::RomLoaded {
                 group: 0,
-                bytes_len: *bytes_len as usize,
+                bytes_len: bytes_len.to_native() as usize,
             },
         };
         Ok(rep)
@@ -213,7 +221,7 @@ impl Codec for GpuCodec {
         let archived = archived_root::<GpuCmdV1>(payload)?;
         match archived {
             ArchivedGpuCmdV1::UploadFrame { lane, .. } => Ok(GpuCmd::UploadFrame {
-                lane: *lane,
+                lane: lane.to_native(),
                 span: default_frame_span(),
             }),
         }
@@ -239,8 +247,8 @@ impl Codec for GpuCodec {
         let archived = archived_root::<GpuRepV1>(payload)?;
         match archived {
             ArchivedGpuRepV1::FramePresented { lane, frame_id } => Ok(GpuRep::FrameShown {
-                lane: *lane,
-                frame_id: *frame_id,
+                lane: lane.to_native(),
+                frame_id: frame_id.to_native(),
             }),
         }
     }
@@ -273,7 +281,7 @@ impl Codec for AudioCodec {
         let archived = archived_root::<AudioCmdV1>(payload)?;
         match archived {
             ArchivedAudioCmdV1::SubmitSamples { frames } => Ok(AudioCmd::Submit {
-                span: default_audio_span(*frames as usize),
+                span: default_audio_span(frames.to_native() as usize),
             }),
         }
     }
@@ -298,7 +306,7 @@ impl Codec for AudioCodec {
         let archived = archived_root::<AudioRepV1>(payload)?;
         match archived {
             ArchivedAudioRepV1::Played { frames } => Ok(AudioRep::Played {
-                frames: *frames as usize,
+                frames: frames.to_native() as usize,
             }),
             ArchivedAudioRepV1::Underrun => Ok(AudioRep::Underrun),
         }
@@ -307,9 +315,10 @@ impl Codec for AudioCodec {
 
 fn serialize<T>(value: &T) -> FabricResult<Vec<u8>>
 where
-    T: rkyv::Serialize<rkyv::ser::serializers::AllocSerializer<256>> + rkyv::Archive,
+    T: Archive,
+    T: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, Error>>,
 {
-    rkyv::to_bytes::<_, 256>(value)
+    to_bytes::<Error>(value)
         .map(|aligned| aligned.into_vec())
         .map_err(|err| FabricError::codec(format!("serialize failure: {err}")))
 }
@@ -344,11 +353,11 @@ fn ensure_tag(envelope: Envelope, expected: u8) -> FabricResult<()> {
 
 fn archived_root<T>(payload: &[u8]) -> FabricResult<&rkyv::Archived<T>>
 where
-    T: rkyv::Archive,
+    T: Archive,
+    T::Archived: for<'a> CheckBytes<HighValidator<'a, Error>>,
 {
-    // SAFETY: upstream callers ensure the payload was produced by `rkyv::to_bytes`, so the
-    // archived value is well-formed and aligned.
-    Ok(unsafe { rkyv::archived_root::<T>(payload) })
+    access::<T::Archived, Error>(payload)
+        .map_err(|err| FabricError::codec(format!("validation failure: {err}")))
 }
 
 /// Returns a default (empty) frame span placeholder.
