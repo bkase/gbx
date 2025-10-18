@@ -1,0 +1,12 @@
+{
+  "name": "gbx2-wasm-tests",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "wasm:test": "node tests/wasm_browser_test.js"
+  },
+  "devDependencies": {
+    "selenium-webdriver": "^4.17.0"
+  }
+}

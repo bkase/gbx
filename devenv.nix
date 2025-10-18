@@ -16,7 +16,7 @@ let
   ];
 
   # Shared WASM build flags for atomics and shared memory
-  wasmSharedMemoryFlags = "-C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--max-memory=1073741824 -C link-arg=--shared-memory -C link-arg=--import-memory";
+  wasmSharedMemoryFlags = "-Z unstable-options -C panic=abort -C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__wasm_init_memory -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base -C link-arg=--max-memory=1073741824";
 in {
   packages = basePkgs;
 
@@ -40,9 +40,16 @@ in {
     # WASM build flags: shared memory with atomics
     # These apply to wasm32-unknown-unknown target builds
     CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS = wasmSharedMemoryFlags;
+    WASM_RUSTFLAGS = wasmSharedMemoryFlags;
   };
 
-  enterShell = '' '';
+  enterShell = ''
+    # Ensure wasm-pack is installed via cargo
+    if ! command -v wasm-pack &> /dev/null; then
+      echo "Installing wasm-pack via cargo..."
+      cargo install wasm-pack
+    fi
+  '';
 
   # Scripts for commit message validation and other utilities
   scripts.validate-commit-msg.exec = ''
@@ -164,42 +171,48 @@ in {
   tasks."test:wasm-smoke".exec = ''
     set -euo pipefail
 
-    export WASM_BINDGEN_DISABLE_THREAD_TRANSFORM=1
-    # For tests, we want atomics but not strict warnings
     export RUSTFLAGS="${wasmSharedMemoryFlags}"
+    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="${wasmSharedMemoryFlags}"
 
-    install_root="''${CARGO_HOME:-$HOME/.cargo}"
+    # Build the transport-worker first
+    echo "Building transport-worker with shared memory support..."
+    cargo build -p transport-worker --target wasm32-unknown-unknown --release -Z build-std=std,panic_abort
 
-    if ! command -v wasm-bindgen-test-runner >/dev/null; then
-      RUSTFLAGS= cargo install wasm-bindgen-cli --version 0.2.104 --locked --root "$install_root" >/dev/null
-    fi
+    artifact="target/wasm32-unknown-unknown/release/transport_worker.wasm"
+    output="web/pkg/transport_worker.wasm"
 
-    registry_dir="''${CARGO_HOME:-$HOME/.cargo}/registry/src"
-    crate_root=""
-    if [ -d "$registry_dir" ]; then
-      for idx in "$registry_dir"/index.crates.io-*; do
-        if [ -d "$idx" ] && [ -d "$idx"/wasm-bindgen-cli-support-0.2.104 ]; then
-          crate_root="$idx/wasm-bindgen-cli-support-0.2.104"
-          break
-        fi
-      done
-    fi
-
-    if [ -n "$crate_root" ] && ! rg -q "WASM_BINDGEN_DISABLE_THREAD_TRANSFORM" "$crate_root/src/transforms/threads/mod.rs"; then
-      patch -N --directory="$crate_root" < patches/wasm-bindgen-cli-support-disable-thread-transform.patch
-      RUSTFLAGS= cargo install wasm-bindgen-cli --version 0.2.104 --locked --force --offline --root "$install_root" >/dev/null
-    fi
-
-    cargo test -p tests --target wasm32-unknown-unknown --no-run -Z build-std=std,panic_abort
-
-    wasm_path=$(find target/wasm32-unknown-unknown/debug/deps -maxdepth 1 -name 'tests-*.wasm' | head -n 1)
-    if [ -z "$wasm_path" ]; then
-      echo "failed to locate wasm test artifact" >&2
+    if [ ! -f "$artifact" ]; then
+      echo "expected worker artifact at $artifact" >&2
       exit 1
     fi
 
-    CHROMEDRIVER=$(which chromedriver) \
-      wasm-bindgen-test-runner "$wasm_path"
+    mkdir -p web/pkg
+    rm -f web/pkg/transport_worker_bg.wasm web/pkg/transport_worker_bg.wasm.d.ts web/pkg/transport_worker.js web/pkg/transport_worker.d.ts
+
+    wasm-tools strip "$artifact" -o "$output"
+
+    if ! wasm-objdump -x -j import "$output" | rg -q 'memory\[0\].*shared.*env\.memory'; then
+      echo "Checking memory import in transport_worker.wasm..."
+      wasm-objdump -x -j import "$output"
+      echo "transport_worker.wasm must import env.memory as shared; check build flags." >&2
+      exit 1
+    fi
+
+    echo "Building test WASM..."
+    rm -rf tests/wasm/pkg
+    mkdir -p tests/wasm/pkg
+    wasm-pack build crates/tests --target web --out-dir ../../tests/wasm/pkg -- -Z build-std=std,panic_abort
+
+    npm install --silent >/dev/null
+
+    export WASM_TEST_PORT=4510
+    node tests/wasm_server.js &
+    SERVER_PID=$!
+    trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+
+    sleep 3
+
+    node tests/wasm_browser_test.js
   '';
 
   tasks."web:watch".exec = "trunk watch --config web/trunk.toml";
