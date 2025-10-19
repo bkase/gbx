@@ -9,6 +9,9 @@ use futures::channel::oneshot;
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Object, Reflect};
 use transport::{Envelope, MsgRing, Record, SlotPool, SlotPoolConfig, SlotPop, TransportError};
+use transport_scenarios::{
+    verify_backpressure, verify_burst, verify_flood, CheckResult, DrainReport,
+};
 use transport_worker::types::{ScenarioStats, TestConfig, WorkerInitDescriptor};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -45,7 +48,11 @@ macro_rules! ensure_eq {
                 left_val, right_val
             )));
         }
-    };
+    };fn check(res: CheckResult) -> Result<(), JsValue> {
+    res.map_err(|msg| JsValue::from_str(&msg))
+}
+
+
 }
 
 #[wasm_bindgen]
@@ -60,11 +67,6 @@ pub async fn wasm_transport_worker_flood_frames() -> Result<(), JsValue> {
     let mut harness = TransportHarness::new().await?;
     let ticket = harness.start_flood(10_000)?;
     let outcome = harness.consume_frames(10_000, None).await?;
-    ensure_eq!(outcome.frames.len(), 10_000, "all frames should drain");
-    ensure!(
-        outcome.frames == outcome.events,
-        "event ring should mirror ready frames"
-    );
     let result = ticket.wait().await?;
     ensure!(
         result.status == 0,
@@ -74,19 +76,12 @@ pub async fn wasm_transport_worker_flood_frames() -> Result<(), JsValue> {
     let stats = result
         .stats
         .ok_or_else(|| JsValue::from_str("missing flood stats"))?;
-    ensure!(
-        stats.produced as usize == 10_000,
-        "worker produced {} frames (expected 10_000)",
-        stats.produced
-    );
-    ensure!(
-        stats.would_block_ready == 0,
-        "flood should not hit ready backpressure"
-    );
-    ensure!(
-        stats.would_block_evt == 0,
-        "flood should not congest the event ring"
-    );
+    let drain = DrainReport {
+        frames: &outcome.frames,
+        events: &outcome.events,
+        max_ready_depth: Some(outcome.max_ready_depth),
+    };
+    check(verify_flood(&drain, &stats, 10_000))?;
     harness.assert_reconciliation()?;
     Ok(())
 }
@@ -106,36 +101,22 @@ pub async fn wasm_transport_worker_burst_fairness() -> Result<(), JsValue> {
             Some(config.drain_budget as usize),
         )
         .await?;
-    ensure!(
-        outcome.frames.len() == outcome.events.len(),
-        "frame/event counts align ({} vs {})",
-        outcome.frames.len(),
-        outcome.events.len()
-    );
-    ensure!(
-        outcome.frames == outcome.events,
-        "bursty events maintain ordering"
-    );
-    ensure!(
-        outcome.max_ready_depth <= FRAME_SLOT_COUNT,
-        "ready ring exceeded slot budget ({} > {})",
-        outcome.max_ready_depth,
-        FRAME_SLOT_COUNT
-    );
     let result = ticket.wait().await?;
     ensure!(result.status == 0, "burst status {}", result.status);
     let stats = result
         .stats
         .ok_or_else(|| JsValue::from_str("missing burst stats"))?;
-    ensure!(
-        stats.produced == (config.bursts * config.burst_size),
-        "worker burst produced {} frames",
-        stats.produced
-    );
-    ensure!(
-        stats.would_block_evt == 0,
-        "bursty workload should not overflow event ring"
-    );
+    let drain = DrainReport {
+        frames: &outcome.frames,
+        events: &outcome.events,
+        max_ready_depth: Some(outcome.max_ready_depth),
+    };
+    check(verify_burst(
+        &drain,
+        &stats,
+        config.bursts * config.burst_size,
+        FRAME_SLOT_COUNT,
+    ))?;
     harness.assert_reconciliation()?;
     Ok(())
 }
@@ -150,28 +131,18 @@ pub async fn wasm_transport_worker_backpressure_recovery() -> Result<(), JsValue
     let ticket = harness.start_backpressure(&cfg)?;
     TimeoutFuture::new(cfg.pause_ms).await;
     let outcome = harness.consume_frames(cfg.frames as usize, None).await?;
-    ensure!(
-        outcome.frames.len() == outcome.events.len(),
-        "frame/event counts align after recovery ({} vs {})",
-        outcome.frames.len(),
-        outcome.events.len()
-    );
     harness.assert_reconciliation()?;
     let result = ticket.wait().await?;
     ensure!(result.status == 0, "backpressure status {}", result.status);
     let stats = result
         .stats
         .ok_or_else(|| JsValue::from_str("missing backpressure stats"))?;
-    ensure!(
-        stats.produced == cfg.frames,
-        "worker produced {} frames (expected {})",
-        stats.produced,
-        cfg.frames
-    );
-    ensure!(
-        stats.would_block_ready > 0 || stats.free_waits > 0,
-        "producer should observe backpressure on ready or free rings"
-    );
+    let drain = DrainReport {
+        frames: &outcome.frames,
+        events: &outcome.events,
+        max_ready_depth: None,
+    };
+    check(verify_backpressure(&drain, &stats, cfg.frames))?;
     Ok(())
 }
 
@@ -499,10 +470,7 @@ struct WorkerTicket {
 }
 
 impl WorkerTicket {
-    fn new(
-        worker: Worker,
-        message: JsValue,
-    ) -> Result<Self, JsValue> {
+    fn new(worker: Worker, message: JsValue) -> Result<Self, JsValue> {
         let (sender, receiver) = oneshot::channel::<JsValue>();
         let sender_cell = Rc::new(RefCell::new(Some(sender)));
         let sender_clone = sender_cell.clone();

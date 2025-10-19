@@ -499,10 +499,7 @@ struct WorkerTicket {
 }
 
 impl WorkerTicket {
-    fn new(
-        worker: Worker,
-        message: JsValue,
-    ) -> Result<Self, JsValue> {
+    fn new(worker: Worker, message: JsValue) -> Result<Self, JsValue> {
         let (sender, receiver) = oneshot::channel::<JsValue>();
         let sender_cell = Rc::new(RefCell::new(Some(sender)));
         let sender_clone = sender_cell.clone();
