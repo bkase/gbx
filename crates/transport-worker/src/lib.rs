@@ -198,7 +198,7 @@ mod wasm {
                 return idx;
             }
             stats.free_waits = stats.free_waits.wrapping_add(1);
-            core::hint::spin_loop();
+            pool.wait_for_free_slot();
         }
     }
 
@@ -208,7 +208,7 @@ mod wasm {
                 SlotPush::Ok => break,
                 SlotPush::WouldBlock => {
                     stats.would_block_ready = stats.would_block_ready.wrapping_add(1);
-                    core::hint::spin_loop();
+                    pool.wait_for_ready_drain();
                 }
             }
         }
@@ -223,7 +223,7 @@ mod wasm {
                 break;
             }
             stats.would_block_evt = stats.would_block_evt.wrapping_add(1);
-            core::hint::spin_loop();
+            ring.wait_for_space();
         }
     }
 

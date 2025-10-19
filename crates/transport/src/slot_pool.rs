@@ -6,6 +6,7 @@
 //! ready work. This module provides a safe façade over that layout.
 
 use crate::region::{SharedRegion, Uninit, Zeroed};
+use crate::wait::{wait_for_change, wake_one};
 use crate::{TransportError, TransportResult};
 #[cfg(feature = "loom")]
 use loom::sync::atomic::{AtomicU32, Ordering};
@@ -132,6 +133,16 @@ impl IndexRing {
         head.wrapping_sub(tail)
     }
 
+    fn wait_for_head_change(&self) {
+        let header = self.region.prefix::<IndexRingHeader>();
+        let _ = wait_for_change(&header.head, Ordering::Acquire);
+    }
+
+    fn wait_for_tail_change(&self) {
+        let header = self.region.prefix::<IndexRingHeader>();
+        let _ = wait_for_change(&header.tail, Ordering::Acquire);
+    }
+
     fn push(&mut self, value: u32) -> Result<(), ()> {
         let (capacity, head, tail) = {
             let header = self.region.prefix::<IndexRingHeader>();
@@ -152,10 +163,9 @@ impl IndexRing {
             entries[index] = value;
         }
 
-        self.region
-            .prefix_mut::<IndexRingHeader>()
-            .head
-            .store(head.wrapping_add(1), Ordering::Release);
+        let header = self.region.prefix_mut::<IndexRingHeader>();
+        header.head.store(head.wrapping_add(1), Ordering::Release);
+        wake_one(&header.head);
         Ok(())
     }
 
@@ -179,10 +189,9 @@ impl IndexRing {
             entries[index]
         };
 
-        self.region
-            .prefix_mut::<IndexRingHeader>()
-            .tail
-            .store(tail.wrapping_add(1), Ordering::Release);
+        let header = self.region.prefix_mut::<IndexRingHeader>();
+        header.tail.store(tail.wrapping_add(1), Ordering::Release);
+        wake_one(&header.tail);
         Some(value)
     }
 
@@ -321,6 +330,11 @@ impl SlotPool {
         self.free_ring.pop()
     }
 
+    /// Parks the caller until the free ring observes additional entries.
+    pub fn wait_for_free_slot(&self) {
+        self.free_ring.wait_for_head_change();
+    }
+
     /// Provides mutable access to the slot identified by `idx`.
     ///
     /// # Panics
@@ -340,6 +354,11 @@ impl SlotPool {
             Ok(()) => SlotPush::Ok,
             Err(()) => SlotPush::WouldBlock,
         }
+    }
+
+    /// Parks the caller until the ready ring frees capacity.
+    pub fn wait_for_ready_drain(&self) {
+        self.ready_ring.wait_for_tail_change();
     }
 
     /// Pops a slot index from the ready ring.

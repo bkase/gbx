@@ -1,3 +1,7 @@
+#![cfg_attr(
+    all(target_arch = "wasm32", not(feature = "loom")),
+    feature(stdarch_wasm_atomic_wait)
+)]
 //! Core transport primitives shared by native and web backends.
 //!
 //! This module exposes the foundational pieces described in the transport spec:
@@ -12,6 +16,7 @@ mod msg_ring;
 mod region;
 pub mod schema;
 mod slot_pool;
+pub mod wait;
 pub mod wasm;
 
 pub use error::{TransportError, TransportResult};

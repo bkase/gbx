@@ -17,6 +17,7 @@
 //! records by reading envelopes and payload slices without additional copies.
 
 use crate::region::{SharedRegion, Zeroed};
+use crate::wait::{wait_for_change, wake_one};
 use crate::{TransportError, TransportResult};
 #[cfg(feature = "loom")]
 use loom::sync::atomic::{AtomicU32, Ordering};
@@ -392,6 +393,7 @@ impl MsgRing {
                 .store(new_tail as u32, Ordering::Release)
         };
         self.consumer_meta.set(None);
+        self.notify_tail();
     }
 
     /// Returns the envelope captured during the most recent peek.
@@ -399,8 +401,29 @@ impl MsgRing {
         self.consumer_meta.get().map(|meta| meta.envelope)
     }
 
+    /// Parks the caller until the consumer tail advances, indicating free space.
+    pub fn wait_for_space(&self) {
+        // SAFETY: The header pointer originates from the owned region and remains valid while
+        // `self` is alive; we only form an immutable reference here.
+        let header = unsafe { &*self.header_ptr() };
+        let _ = wait_for_change(&header.tail_bytes, Ordering::Acquire);
+    }
+
     fn header_ptr(&self) -> *const MsgRingHeader {
         self.region.as_ptr() as *const MsgRingHeader
+    }
+
+    fn notify_head(&self) {
+        // SAFETY: Header pointer is derived from the owned shared region; forming an immutable
+        // reference is safe for the lifetime of `self`.
+        let header = unsafe { &*self.header_ptr() };
+        wake_one(&header.head_bytes);
+    }
+
+    fn notify_tail(&self) {
+        // SAFETY: Same as above – the header pointer stays valid for the duration of `self`.
+        let header = unsafe { &*self.header_ptr() };
+        wake_one(&header.tail_bytes);
     }
 
     fn data_slice(&self) -> &[u8] {
@@ -431,6 +454,7 @@ impl MsgRing {
     ) {
         self.write_envelope(offset, envelope, payload_len, record_len);
         self.store_head_release(new_head as u32);
+        self.notify_head();
     }
 
     fn write_envelope(
