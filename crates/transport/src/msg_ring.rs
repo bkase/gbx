@@ -200,9 +200,10 @@ impl MsgRing {
     /// Callers must guarantee that the layout describes a region initialised by the host and that
     /// the shared memory stays alive for the lifetime of the returned ring.
     pub unsafe fn from_wasm_layout(
-        layout: crate::wasm::MsgRingLayout,
+        layout: impl crate::wasm::IntoNativeLayout<Native = crate::wasm::MsgRingLayout>,
         default_envelope: Envelope,
     ) -> Self {
+        let layout = layout.into_native();
         let header_offset = layout.header.offset as usize;
         let header_len = layout.header.length as usize;
         let data_offset = layout.data.offset as usize;

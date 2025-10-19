@@ -7,6 +7,7 @@ edition.workspace = true
 anyhow = { workspace = true }
 hub = { path = "../hub" }
 parking_lot = { workspace = true }
+rkyv = { version = "0.8", features = ["bytecheck"] }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 transport = { path = "../transport" }

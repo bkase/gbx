@@ -98,7 +98,10 @@ impl IndexRing {
 
     #[cfg(target_arch = "wasm32")]
     /// Attaches to an existing index ring allocated in shared linear memory.
-    pub unsafe fn from_layout(layout: crate::wasm::IndexRingLayout) -> Self {
+    pub unsafe fn from_layout(
+        layout: impl crate::wasm::IntoNativeLayout<Native = crate::wasm::IndexRingLayout>,
+    ) -> Self {
+        let layout = layout.into_native();
         let header_offset = layout.header.offset as usize;
         let header_len = layout.header.length as usize;
         let entries_offset = layout.entries.offset as usize;
@@ -295,7 +298,10 @@ impl SlotPool {
     /// Attaches to a slot pool carved out in shared linear memory.
     ///
     /// Callers must ensure the layout references live shared memory that remains valid.
-    pub unsafe fn from_wasm_layout(layout: crate::wasm::SlotPoolLayout) -> Self {
+    pub unsafe fn from_wasm_layout(
+        layout: impl crate::wasm::IntoNativeLayout<Native = crate::wasm::SlotPoolLayout>,
+    ) -> Self {
+        let layout = layout.into_native();
         let slots_len = layout.slots.length as usize;
         let slots = SharedRegion::<Uninit>::from_linear_memory(
             slots_len,

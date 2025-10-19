@@ -9,10 +9,7 @@ use futures::channel::oneshot;
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Object, Reflect};
 use transport::{Envelope, MsgRing, Record, SlotPool, SlotPoolConfig, SlotPop, TransportError};
-use transport_worker::types::{
-    BackpressureConfig as WorkerBackpressureConfig, BurstConfig as WorkerBurstConfig,
-    FloodConfig as WorkerFloodConfig, ScenarioStats, WorkerInitDescriptor,
-};
+use transport_worker::types::{ScenarioStats, TestConfig, WorkerInitDescriptor};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{MessageEvent, Worker, WorkerOptions, WorkerType};
@@ -193,16 +190,8 @@ struct BackpressureScenario {
 #[derive(Clone, Copy)]
 enum WorkerOp {
     Init = 0,
-    Flood = 1,
-    Burst = 2,
-    Backpressure = 3,
-}
-
-#[allow(dead_code)]
-enum WorkerConfig {
-    Flood(Box<WorkerFloodConfig>),
-    Burst(Box<WorkerBurstConfig>),
-    Backpressure(Box<WorkerBackpressureConfig>),
+    RegisterTest = 1,
+    Run = 2,
 }
 
 struct TransportHarness {
@@ -216,7 +205,7 @@ impl TransportHarness {
         let memory = shared_memory()?;
         let worker = spawn_worker()?;
         let init_msg = make_init_message(buffers.descriptor_ptr(), &memory)?;
-        let ticket = WorkerTicket::new(worker.clone(), init_msg, None, None)?;
+        let ticket = WorkerTicket::new(worker.clone(), init_msg)?;
         let status = ticket.wait_status().await?;
         if status != 0 {
             return Err(JsValue::from_str(&format!(
@@ -227,45 +216,22 @@ impl TransportHarness {
         Ok(Self { worker, buffers })
     }
 
-    fn start_flood(&self, frame_count: usize) -> Result<WorkerTicket, JsValue> {
-        let config = Box::new(WorkerFloodConfig {
-            frame_count: frame_count as u32,
-        });
+    fn start_flood(&self, frame_count: usize) -> Result<FabricTestRunner, JsValue> {
+        let config = TestConfig::flood(frame_count as u32);
         let stats = Box::new(ScenarioStats::default());
-        let msg = make_run_message(WorkerOp::Flood, ptr_u32(&*config), ptr_u32(&*stats))?;
-        WorkerTicket::new(
-            self.worker.clone(),
-            msg,
-            Some(WorkerConfig::Flood(config)),
-            Some(stats),
-        )
+        FabricTestRunner::new(self.worker.clone(), config, stats)
     }
 
-    fn start_burst(&self, cfg: &BurstScenario) -> Result<WorkerTicket, JsValue> {
-        let config = Box::new(WorkerBurstConfig {
-            bursts: cfg.bursts,
-            burst_size: cfg.burst_size,
-        });
+    fn start_burst(&self, cfg: &BurstScenario) -> Result<FabricTestRunner, JsValue> {
+        let config = TestConfig::burst(cfg.bursts, cfg.burst_size);
         let stats = Box::new(ScenarioStats::default());
-        let msg = make_run_message(WorkerOp::Burst, ptr_u32(&*config), ptr_u32(&*stats))?;
-        WorkerTicket::new(
-            self.worker.clone(),
-            msg,
-            Some(WorkerConfig::Burst(config)),
-            Some(stats),
-        )
+        FabricTestRunner::new(self.worker.clone(), config, stats)
     }
 
-    fn start_backpressure(&self, cfg: &BackpressureScenario) -> Result<WorkerTicket, JsValue> {
-        let config = Box::new(WorkerBackpressureConfig { frames: cfg.frames });
+    fn start_backpressure(&self, cfg: &BackpressureScenario) -> Result<FabricTestRunner, JsValue> {
+        let config = TestConfig::backpressure(cfg.frames);
         let stats = Box::new(ScenarioStats::default());
-        let msg = make_run_message(WorkerOp::Backpressure, ptr_u32(&*config), ptr_u32(&*stats))?;
-        WorkerTicket::new(
-            self.worker.clone(),
-            msg,
-            Some(WorkerConfig::Backpressure(config)),
-            Some(stats),
-        )
+        FabricTestRunner::new(self.worker.clone(), config, stats)
     }
 
     async fn consume_frames(
@@ -410,20 +376,132 @@ struct WorkerRunResult {
     stats: Option<ScenarioStats>,
 }
 
+/// Runs a fabric test by registering the test engine and continuously polling until complete
+struct FabricTestRunner {
+    completion: Rc<RefCell<Option<oneshot::Sender<WorkerRunResult>>>>,
+    #[allow(dead_code)]
+    config: Box<TestConfig>,
+    #[allow(dead_code)]
+    stats: Box<ScenarioStats>,
+}
+
+impl FabricTestRunner {
+    fn new(worker: Worker, config: TestConfig, stats: Box<ScenarioStats>) -> Result<Self, JsValue> {
+        let config = Box::new(config);
+        let completion = Rc::new(RefCell::new(None::<oneshot::Sender<WorkerRunResult>>));
+
+        // Register the test engine
+        let register_msg = make_register_test_message(ptr_u32(&*config), ptr_u32(&*stats))?;
+
+        // Kick off background task to run the fabric worker
+        let worker_clone = worker.clone();
+        let completion_clone = completion.clone();
+        let stats_ptr = ptr_u32(&*stats);
+
+        wasm_bindgen_futures::spawn_local(async move {
+            // Wait for registration response
+            let (reg_sender, reg_receiver) = oneshot::channel::<JsValue>();
+            let reg_sender_cell = Rc::new(RefCell::new(Some(reg_sender)));
+            let reg_sender_clone = reg_sender_cell.clone();
+            let reg_closure = Closure::wrap(Box::new(move |event: MessageEvent| {
+                if let Some(sender) = reg_sender_clone.borrow_mut().take() {
+                    let _ = sender.send(event.data());
+                }
+            }) as Box<dyn FnMut(MessageEvent)>);
+
+            worker_clone.set_onmessage(Some(reg_closure.as_ref().unchecked_ref()));
+            let _ = worker_clone.post_message(&register_msg);
+
+            let reg_result = match reg_receiver.await {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+
+            let reg_status = get_i32_field(&reg_result, "status").unwrap_or(-1);
+            if reg_status != 0 {
+                return;
+            }
+
+            // Continuously run fabric worker until complete
+            loop {
+                let run_msg = match make_run_message() {
+                    Ok(msg) => msg,
+                    Err(_) => break,
+                };
+
+                let (run_sender, run_receiver) = oneshot::channel::<JsValue>();
+                let run_sender_cell = Rc::new(RefCell::new(Some(run_sender)));
+                let run_sender_clone = run_sender_cell.clone();
+                let run_closure = Closure::wrap(Box::new(move |event: MessageEvent| {
+                    if let Some(sender) = run_sender_clone.borrow_mut().take() {
+                        let _ = sender.send(event.data());
+                    }
+                }) as Box<dyn FnMut(MessageEvent)>);
+
+                worker_clone.set_onmessage(Some(run_closure.as_ref().unchecked_ref()));
+                let _ = worker_clone.post_message(&run_msg);
+
+                let result = match run_receiver.await {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+
+                let work = get_u32_field(&result, "work").unwrap_or(0);
+
+                // If no work done, test is complete
+                if work == 0 {
+                    break;
+                }
+
+                // Yield to let frames be consumed
+                TimeoutFuture::new(0).await;
+            }
+
+            worker_clone.set_onmessage(None);
+
+            // Read final stats
+            let stats = unsafe {
+                let ptr = stats_ptr as *const ScenarioStats;
+                *ptr
+            };
+
+            // Signal completion
+            if let Some(sender) = completion_clone.borrow_mut().take() {
+                let _ = sender.send(WorkerRunResult {
+                    op: 0,
+                    status: 0,
+                    stats: Some(stats),
+                });
+            }
+        });
+
+        Ok(Self {
+            completion,
+            config,
+            stats,
+        })
+    }
+
+    async fn wait(self) -> Result<WorkerRunResult, JsValue> {
+        let (sender, receiver) = oneshot::channel::<WorkerRunResult>();
+        *self.completion.borrow_mut() = Some(sender);
+
+        receiver
+            .await
+            .map_err(|_| JsValue::from_str("fabric worker task died"))
+    }
+}
+
 struct WorkerTicket {
     receiver: oneshot::Receiver<JsValue>,
     worker: Worker,
     closure: Option<Closure<dyn FnMut(MessageEvent)>>,
-    _config: Option<WorkerConfig>,
-    stats: Option<Box<ScenarioStats>>,
 }
 
 impl WorkerTicket {
     fn new(
         worker: Worker,
         message: JsValue,
-        config: Option<WorkerConfig>,
-        stats: Option<Box<ScenarioStats>>,
     ) -> Result<Self, JsValue> {
         let (sender, receiver) = oneshot::channel::<JsValue>();
         let sender_cell = Rc::new(RefCell::new(Some(sender)));
@@ -441,12 +519,10 @@ impl WorkerTicket {
             receiver,
             worker,
             closure: Some(closure),
-            _config: config,
-            stats,
         })
     }
 
-    async fn wait(mut self) -> Result<WorkerRunResult, JsValue> {
+    async fn wait_status(mut self) -> Result<i32, JsValue> {
         let value = self
             .receiver
             .await
@@ -457,15 +533,7 @@ impl WorkerTicket {
         }
 
         let status = get_i32_field(&value, "status")?;
-        let op = get_u32_field(&value, "op")?;
-        let stats = self.stats.map(|boxed| *boxed);
-
-        Ok(WorkerRunResult { op, status, stats })
-    }
-
-    async fn wait_status(self) -> Result<i32, JsValue> {
-        let result = self.wait().await?;
-        Ok(result.status)
+        Ok(status)
     }
 }
 
@@ -493,11 +561,17 @@ fn make_init_message(
     Ok(msg.into())
 }
 
-fn make_run_message(op: WorkerOp, config_ptr: u32, stats_ptr: u32) -> Result<JsValue, JsValue> {
+fn make_register_test_message(config_ptr: u32, stats_ptr: u32) -> Result<JsValue, JsValue> {
     let msg = Object::new();
-    set_u32(&msg, "op", op as u32)?;
+    set_u32(&msg, "op", WorkerOp::RegisterTest as u32)?;
     set_u32(&msg, "configPtr", config_ptr)?;
     set_u32(&msg, "statsPtr", stats_ptr)?;
+    Ok(msg.into())
+}
+
+fn make_run_message() -> Result<JsValue, JsValue> {
+    let msg = Object::new();
+    set_u32(&msg, "op", WorkerOp::Run as u32)?;
     Ok(msg.into())
 }
 

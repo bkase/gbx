@@ -14,6 +14,6 @@ pub use builder::{build_service, MailboxSpec, RingSpec, ServiceSpec, SlotPoolSpe
 pub use codec::{Codec, Encoded};
 pub use endpoint::{EndpointHandle, ServiceAdapter, WorkerEndpoint};
 pub use error::{FabricError, FabricResult};
-pub use layout::{EndpointLayout, FabricLayout, PortLayout, PortRole};
+pub use layout::{ArchivedFabricLayout, EndpointLayout, FabricLayout, PortLayout, PortRole};
 pub use runtime::{ServiceEngine, WorkerRuntime};
 pub use span::SlotSpan;

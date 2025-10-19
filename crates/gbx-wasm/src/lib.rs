@@ -10,10 +10,17 @@
 
 // Re-export all worker functions from transport-worker
 // These are the reusable, app-agnostic worker entry points
+
+// Fabric worker functions (generalized runtime)
+pub use transport_worker::{fabric_worker_init, fabric_worker_run};
+
+// Test scenario worker functions (built on fabric layer)
 pub use transport_worker::{
-    worker_backpressure, worker_burst, worker_flood, worker_init, BackpressureConfig, BurstConfig,
-    FloodConfig, ScenarioStats, WorkerInitDescriptor,
+    worker_init, worker_register_test, ScenarioStats, TestConfig, TestType, WorkerInitDescriptor,
 };
+
+// Re-export types for convenience
+pub use transport_worker::{EndpointLayout, FabricLayout, PortLayout, PortRole};
 
 // Test orchestration - GBX-specific integration tests
 #[cfg(target_arch = "wasm32")]
