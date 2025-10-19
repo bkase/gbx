@@ -1,5 +1,7 @@
 use hub::SubmitPolicy;
-use transport::{Envelope, Mailbox, MsgRing};
+use parking_lot::Mutex;
+use std::sync::Arc;
+use transport::{Envelope, Mailbox, MsgRing, SlotPool, SlotPoolConfig};
 
 use crate::codec::Codec;
 use crate::endpoint::{EndpointHandle, WorkerEndpoint};
@@ -25,6 +27,11 @@ pub struct MailboxSpec {
     pub envelope_tag: u8,
 }
 
+/// Specification for a slot pool (frame/audio/bulk data).
+pub struct SlotPoolSpec {
+    pub config: SlotPoolConfig,
+}
+
 /// Complete specification for building a service endpoint pair.
 pub struct ServiceSpec<C: Codec> {
     pub codec: C,
@@ -33,6 +40,7 @@ pub struct ServiceSpec<C: Codec> {
     pub coalesce: Option<MailboxSpec>,
     pub replies: RingSpec,
     pub reply_policy: SubmitPolicy,
+    pub slot_pools: Vec<SlotPoolSpec>,
 }
 
 /// Builds a bidirectional service endpoint pair from a specification.
@@ -106,11 +114,35 @@ pub fn build_service<C: Codec>(
         );
     }
 
+    // Allocate slot pools
+    let mut slot_pools = Vec::with_capacity(spec.slot_pools.len());
+    #[cfg(target_arch = "wasm32")]
+    let pool_specs_iter = spec.slot_pools.into_iter().enumerate();
+    #[cfg(not(target_arch = "wasm32"))]
+    let pool_specs_iter = spec.slot_pools.into_iter();
+
+    for pool_item in pool_specs_iter {
+        #[cfg(target_arch = "wasm32")]
+        let (idx, pool_spec) = pool_item;
+        #[cfg(not(target_arch = "wasm32"))]
+        let pool_spec = pool_item;
+
+        let pool = SlotPool::new(pool_spec.config)?;
+        #[cfg(target_arch = "wasm32")]
+        {
+            use crate::layout::PortLayout;
+            let role = PortRole::SlotPool(idx);
+            layout.push_port(role, PortLayout::SlotPool(pool.wasm_layout()));
+        }
+        slot_pools.push(Arc::new(Mutex::new(pool)));
+    }
+
     let endpoint = EndpointHandle {
         lossless: lossless_pair.as_ref().map(|p| p.producer.clone()),
         besteffort: besteffort_pair.as_ref().map(|p| p.producer.clone()),
         coalesce: coalesce_pair.as_ref().map(|p| p.producer.clone()),
         replies: replies_pair.consumer.clone(),
+        slot_pools: slot_pools.clone(),
         codec: spec.codec.clone(),
     };
 
@@ -119,6 +151,7 @@ pub fn build_service<C: Codec>(
         besteffort: besteffort_pair.as_ref().map(|p| p.consumer.clone()),
         coalesce: coalesce_pair.as_ref().map(|p| p.consumer.clone()),
         replies: replies_pair.producer.clone(),
+        slot_pools,
         codec: spec.codec,
     };
 

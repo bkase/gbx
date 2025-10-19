@@ -1,5 +1,8 @@
 use hub::{Service, SubmitOutcome, SubmitPolicy};
+use parking_lot::Mutex;
 use smallvec::SmallVec;
+use std::sync::Arc;
+use transport::SlotPool;
 
 use crate::codec::Codec;
 use crate::error::{FabricError, FabricResult};
@@ -12,6 +15,7 @@ pub struct EndpointHandle<C: Codec> {
     pub(crate) besteffort: Option<ProducerPort>,
     pub(crate) coalesce: Option<ProducerPort>,
     pub(crate) replies: ConsumerPort,
+    pub(crate) slot_pools: Vec<Arc<Mutex<SlotPool>>>,
     pub(crate) codec: C,
 }
 
@@ -42,6 +46,11 @@ impl<C: Codec> EndpointHandle<C> {
         })?;
         Ok(out)
     }
+
+    /// Returns a slice of all configured slot pools.
+    pub fn slot_pools(&self) -> &[Arc<Mutex<SlotPool>>] {
+        &self.slot_pools
+    }
 }
 
 /// Worker-facing endpoint used by service engines inside the runtime.
@@ -51,6 +60,7 @@ pub struct WorkerEndpoint<C: Codec> {
     pub(crate) besteffort: Option<ConsumerPort>,
     pub(crate) coalesce: Option<ConsumerPort>,
     pub(crate) replies: ProducerPort,
+    pub(crate) slot_pools: Vec<Arc<Mutex<SlotPool>>>,
     pub(crate) codec: C,
 }
 
@@ -79,6 +89,11 @@ impl<C: Codec> WorkerEndpoint<C> {
         let encoded = self.codec.encode_rep(rep)?;
         self.replies
             .try_send(encoded.envelope, encoded.payload.as_slice())
+    }
+
+    /// Returns a slice of all configured slot pools.
+    pub fn slot_pools(&self) -> &[Arc<Mutex<SlotPool>>] {
+        &self.slot_pools
     }
 
     fn drain_port<F>(
