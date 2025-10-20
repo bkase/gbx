@@ -166,6 +166,7 @@ in {
   tasks."test:workspace".exec = ''
     export RUSTFLAGS="$NATIVE_RUSTFLAGS"
     cargo test --all-targets
+    cargo test -p transport-fabric --features proptest --test mailbox_tests
   '';
   tasks."test:golden".exec = ''
     export RUSTFLAGS="$NATIVE_RUSTFLAGS"
