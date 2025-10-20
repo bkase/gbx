@@ -62,8 +62,7 @@ pub fn verify_burst(
     if let Some(depth) = drain.max_ready_depth {
         if depth > slot_budget {
             return Err(format!(
-                "ready ring depth {} exceeded slot budget {}",
-                depth, slot_budget
+                "ready ring depth {depth} exceeded slot budget {slot_budget}"
             ));
         }
     }

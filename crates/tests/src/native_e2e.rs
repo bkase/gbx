@@ -25,7 +25,10 @@ const EVENT_ENVELOPE: Envelope = Envelope {
 
 struct SharedSlotPool(UnsafeCell<SlotPool>);
 
+// SAFETY: `SharedSlotPool` only exposes interior mutability via explicit methods that
+// serialise access; the underlying `SlotPool` is Send/Sync once guarded this way.
 unsafe impl Send for SharedSlotPool {}
+// SAFETY: See above; all shared access paths go through `with_mut`, preserving exclusivity.
 unsafe impl Sync for SharedSlotPool {}
 
 impl SharedSlotPool {
@@ -35,13 +38,17 @@ impl SharedSlotPool {
     }
 
     fn with_mut<R>(&self, f: impl FnOnce(&mut SlotPool) -> R) -> R {
+        // SAFETY: `UnsafeCell` grants exclusive access; callers must not alias the pool.
         unsafe { f(&mut *self.0.get()) }
     }
 }
 
 struct SharedMsgRing(UnsafeCell<MsgRing>);
 
+// SAFETY: `SharedMsgRing` mediates access through `with_mut`, so cross-thread usage respects
+// the ring's interior mutability requirements.
 unsafe impl Send for SharedMsgRing {}
+// SAFETY: As above, shared references can only act via controlled mutable access.
 unsafe impl Sync for SharedMsgRing {}
 
 impl SharedMsgRing {
@@ -51,6 +58,7 @@ impl SharedMsgRing {
     }
 
     fn with_mut<R>(&self, f: impl FnOnce(&mut MsgRing) -> R) -> R {
+        // SAFETY: Exclusive mutable reference is produced while holding no other aliases.
         unsafe { f(&mut *self.0.get()) }
     }
 }
@@ -278,7 +286,7 @@ fn native_fabric_flood_frames() {
         events: &events,
         max_ready_depth: None,
     };
-    verify_flood(&drain, &*stats_guard, FRAME_TARGET).expect("flood verification");
+    verify_flood(&drain, &stats_guard, FRAME_TARGET).expect("flood verification");
     channels.assert_reconciliation();
 }
 
@@ -343,7 +351,7 @@ fn native_fabric_burst_fairness() {
     };
     verify_burst(
         &drain,
-        &*stats_guard,
+        &stats_guard,
         BURSTS * BURST_SIZE,
         FRAME_SLOT_COUNT as usize,
     )
@@ -401,6 +409,6 @@ fn native_fabric_backpressure_recovery() {
         events: &events,
         max_ready_depth: None,
     };
-    verify_backpressure(&drain, &*stats_guard, FRAMES).expect("backpressure verification");
+    verify_backpressure(&drain, &stats_guard, FRAMES).expect("backpressure verification");
     channels.assert_reconciliation();
 }

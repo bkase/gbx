@@ -36,6 +36,8 @@ impl PtrStatsSink {
     }
 }
 
+// SAFETY: `PtrStatsSink` only transports a pointer provided by callers who guarantee
+// shared access invariants; we never move or alias the underlying memory unsafely.
 unsafe impl Send for PtrStatsSink {}
 
 impl StatsSink for PtrStatsSink {
@@ -63,13 +65,13 @@ impl ArcStatsSink {
 impl StatsSink for ArcStatsSink {
     fn with_stats<R>(&self, f: impl FnOnce(&mut ScenarioStats) -> R) -> R {
         let mut guard = self.0.lock();
-        f(&mut *guard)
+        f(&mut guard)
     }
 }
 
 impl StatsSink for Arc<Mutex<ScenarioStats>> {
     fn with_stats<R>(&self, f: impl FnOnce(&mut ScenarioStats) -> R) -> R {
         let mut guard = self.lock();
-        f(&mut *guard)
+        f(&mut guard)
     }
 }

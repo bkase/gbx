@@ -138,7 +138,7 @@ where
                 }
 
                 let mut work = 0usize;
-                while *current_burst < *bursts {
+                if *current_burst < *bursts {
                     while *current_offset < *burst_size {
                         let frame_id = (*current_burst) * (*burst_size) + (*current_offset);
                         if Self::produce_frame(handle, stats, frame_id) {
@@ -148,7 +148,6 @@ where
                     }
                     *current_offset = 0;
                     *current_burst += 1;
-                    break;
                 }
                 work
             }
