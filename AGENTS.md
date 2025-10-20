@@ -5,7 +5,7 @@
 - `crates/services/*` provide non-blocking service shims (kernel, GPU, audio, FS); replace or extend these for real backends.
 - Shared utilities live in `crates/transport`; test-only scaffolding is in `crates/mock`.
 - Integration-style tests reside in `crates/tests`; architecture and scaffolding notes are under `docs/`.
-- Web assets (WASM host stubs, Trunk config) belong in `web/`; native build artifacts land in `target/`.
+- Web assets (WASM host stubs) belong in `web/`; native build artifacts land in `target/`.
 
 ## Build, Test, and Development Commands
 - `devenv shell` — enter the reproducible Rust toolchain environment (direnv auto-loads it when available).

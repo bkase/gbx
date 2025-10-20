@@ -29,10 +29,8 @@ Ultra-high-performance, Elm-inspired Game Boy emulator built around SIMD kernels
 
 ## Web Dev Server
 
-- `devenv tasks run web:watch` — rebuilds `web/dist/` with Trunk whenever sources change (HTML, assets, wasm).
 - `devenv tasks run web:serve` — runs the Rust dev server that injects COOP/COEP headers so browsers enable SharedArrayBuffer/WebGPU.
 - Adjust the port or host by passing extra args (for example `devenv tasks run web:serve -- --host 0.0.0.0 --port 9000`); the default bind is `127.0.0.1:8080`.
-- Replace `web/index.html` with the real host page once the WASM front-end is wired up (Trunk copies it into `web/dist/`).
 
 ## Repository Layout
 
@@ -50,7 +48,7 @@ crates/
 docs/
   architecture.md  # authoritative design reference
   scaffold.md      # devenv tasks + engineering notes
-web/               # WASM host, Trunk config (future UI runtime)
+web/               # WASM host artifacts (future UI runtime)
 ```
 
 ### WASM Architecture: Single Module Pattern
@@ -77,7 +75,7 @@ web/               # WASM host, Trunk config (future UI runtime)
 
 - **Formatting & linting**: enforced via `cargo fmt` and `cargo clippy -D warnings`. Run the `format:workspace` and `lint:workspace` tasks before pushing.
 - **Testing**: `devenv tasks run test:workspace` executes unit and integration tests. Add new coverage under `crates/tests/src/` with descriptive names (e.g., `scheduler_lossless_requeue`).
-- **SIMD/Web builds**: ensure `rustup target add wasm32-unknown-unknown` (already handled by devenv). Web pipelines will later use Trunk; see `docs/scaffold.md` for planned tasks.
+- **SIMD/Web builds**: ensure `rustup target add wasm32-unknown-unknown` (already handled by devenv). See `docs/scaffold.md` for planned tasks.
 - **Architecture alignment**: new commands, reports, or services must update both the code and the relevant sections in `docs/architecture.md`. Maintain the default submit policies via `default_policy()` implementations.
 
 ## Contributing

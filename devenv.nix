@@ -6,7 +6,6 @@ let
     fd
     ripgrep
     cargo-nextest
-    trunk
     wasm-tools
     wabt
     chromedriver
@@ -223,7 +222,6 @@ in {
     node tests/wasm_browser_test.js
   '';
 
-  tasks."web:watch".exec = "trunk watch --config web/trunk.toml";
   tasks."web:serve".exec =
     "cargo run -p dev_server -- --dist web/dist --port 8080";
 

@@ -16,7 +16,7 @@ result
 # Rust target artifacts
 target/
 
-# Web build output (future Trunk dist)
+# Web build output
 web/dist/
 web/pkg/transport_worker.wasm
 tests/wasm/pkg/

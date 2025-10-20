@@ -35,9 +35,8 @@ gameboy-emulator/
 │  ├─ mock/                  # mocks, chaos hooks
 │  └─ tests/                 # unit, property, fuzz, perf, determinism
 └─ web/
-   ├─ index.html
    ├─ main.ts                # thin TypeScript runtime: UI input → Intent
-   └─ trunk.toml             # Trunk config for WASM/WebGPU
+   └─ pkg/                   # WASM build output
 ```
 
 ---
@@ -46,7 +45,7 @@ gameboy-emulator/
 
 - **Native:** `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` (CI), optionally cross-target `x86_64-apple-darwin` from Apple Silicon via SDK if desired later.
 - **Web:** `wasm32-unknown-unknown` with **SIMD** (`+simd128`).
-  - Use `wasm-bindgen` for glue, or `wasm-bindgen` via Trunk pipeline.
+  - Use `wasm-bindgen` for glue with wasm-pack.
   - Renderer: `wgpu` (compiles to WebGPU on web, Vulkan/Metal on native).
 
 **Feature flags (example):**
@@ -77,7 +76,6 @@ in
   packages = with pkgs; [
     rustToolchain
     nodejs
-    trunk
     wasm-pack
     binaryen            # wasm-opt
     wasm-bindgen-cli
@@ -100,8 +98,6 @@ in
     CARGO_TERM_COLOR = "always";
     # For wgpu/WebGPU on CI: allow headless checks (Linux)
     WGPU_BACKEND = "vulkan,metal,gl,dx12,webgpu";
-    # For trunk (if needed)
-    TRUNK_BUILD_PUBLIC_URL = "/";
   };
 
   # Bootstrap: runs when entering shell (interactive and CI)
@@ -113,7 +109,6 @@ in
     rustup component add clippy rustfmt
     echo "Rust: $(rustc --version)"
     echo "Node: $(node --version)"
-    echo "Trunk: $(trunk --version)"
   '';
 
   # -------- TASKS (the important part) --------
@@ -155,21 +150,18 @@ in
 
     # ---------- Web / WASM ----------
     "build:wasm" = {
-      # Use wasm-pack to create web-compatible pkg; then trunk for bundling.
       command = ''
-        # If using wasm-bindgen directly, you could swap wasm-pack with cargo + wasm-bindgen
         wasm-pack build crates/app --target web --release
-        trunk build --release --config web/trunk.toml
       '';
-      description = "Build WASM bundle (SIMD) with Trunk";
+      description = "Build WASM bundle (SIMD) with wasm-pack";
     };
 
     "run:web" = {
       command = ''
         # Starts dev server on http://127.0.0.1:8080
-        trunk serve --config web/trunk.toml --open
+        cargo run -p dev_server -- --dist web/dist --port 8080
       '';
-      description = "Run Trunk dev server (WebGPU + WASM)";
+      description = "Run dev server (WebGPU + WASM with COOP/COEP headers)";
     };
 
     # Example “typed” tasks (you can add more granular ones later)
@@ -283,59 +275,26 @@ jobs:
 You can add:
 
 - `actions/cache` for `~/.cargo` and `target/` keyed by `Cargo.lock` + runner OS.
-- Trunk/Node caches if your web artifacts are large.
+- Node caches if your web artifacts are large.
 
 ---
 
-## 5) Trunk & Web Runtime
-
-**web/trunk.toml**
-
-```toml
-[build]
-target = "index.html"
-dist = "web/dist"
-
-[watch]
-ignore = ["../target", "dist"]
-
-[serve]
-port = 8080
-open = false
-```
-
-**web/index.html** (placeholder entry point)
-
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>GBX Dev Shell</title>
-  </head>
-  <body>
-    <main>
-      <h1>GBX Dev Shell</h1>
-      <p>Swap this page for your actual WASM bootstrap or Elm-style UI.</p>
-    </main>
-  </body>
-</html>
-```
+## 5) Web Runtime & Dev Server
 
 **Local dev loop with COOP/COEP headers**
 
 ```bash
-# Terminal A: continuously build the WASM bundle into web/dist
-devenv tasks run web:watch
+# Build the WASM bundle
+devenv tasks run build:transport-worker
 
-# Terminal B: serve the dist dir with required headers
+# Serve the dist dir with required headers
 devenv tasks run web:serve
 ```
 
-The Rust server injects `Cross-Origin-Opener-Policy: same-origin` and
+The Rust dev server (`crates/dev_server`) injects `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp`, so browsers unlock shared-array
 buffer and WebGPU paths needed for the emulator. Add assets (JS, wasm,
-textures) under `web/` and Trunk will rebundle them into `web/dist/`.
+textures) under `web/` as needed.
 Pass additional CLI flags to the dev server with `--`, e.g. `devenv tasks run web:serve -- --port 9090`.
 
 ---
@@ -422,6 +381,6 @@ Expose useful test entrypoints as devenv tasks later (e.g., `test:determinism`, 
 ## 9) Future Extensions
 
 - **Matrix CI:** `{ os: [macos-14, ubuntu-latest], mode: [native, wasm] }`.
-- **Caches:** `~/.cargo`, `target/`, Trunk artifacts.
+- **Caches:** `~/.cargo`, `target/`, web artifacts.
 - **CD:** Pages/Cloudflare Pages deploy of `dist` after `build:wasm`.
 - **GPU perf CI:** headless compute sanity via `wgpu` on Linux (Vulkan) to catch shader regressions.

@@ -25,7 +25,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Static dev server with COOP/COEP headers")]
 struct Args {
-    /// Directory containing static assets (Trunk dist output)
+    /// Directory containing static assets
     #[arg(long, default_value = "web/dist")]
     dist: PathBuf,
 
