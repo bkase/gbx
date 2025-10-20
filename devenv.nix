@@ -222,9 +222,6 @@ in {
     node tests/wasm_browser_test.js
   '';
 
-  tasks."web:serve".exec =
-    "cargo run -p dev_server -- --dist web/dist --port 8080";
-
   # Git hooks for code quality enforcement
   git-hooks.hooks = {
     format-check = {

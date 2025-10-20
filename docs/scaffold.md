@@ -5,7 +5,7 @@
 
 ## 0) Scope & Objectives
 
-- **DX & Reproducibility:** One declarative `devenv.nix` that exposes consistent **tasks**: `format`, `lint`, `test`, `build`, `build:wasm`, `run:web`, `bench`, `fuzz`.
+- **DX & Reproducibility:** One declarative `devenv.nix` that exposes consistent **tasks**: `format`, `lint`, `test`, `build`, `build:wasm`, `bench`, `fuzz`.
 - **Cross-platform:** Native (macOS Apple Silicon & Linux x86_64), WebAssembly (SIMD), WebGPU renderer.
 - **CI parity:** GitHub Actions jobs call the same devenv tasks as local dev (see uploaded example that runs `devenv tasks run …` ).
 - **Perf foundation:** SIMD-wide kernel; multi-worker parallelism (native threads / web workers); Elm-style typed services & reducers.
@@ -156,15 +156,7 @@ in
       description = "Build WASM bundle (SIMD) with wasm-pack";
     };
 
-    "run:web" = {
-      command = ''
-        # Starts dev server on http://127.0.0.1:8080
-        cargo run -p dev_server -- --dist web/dist --port 8080
-      '';
-      description = "Run dev server (WebGPU + WASM with COOP/COEP headers)";
-    };
-
-    # Example “typed” tasks (you can add more granular ones later)
+    # Example "typed" tasks (you can add more granular ones later)
     "lint:workspace" = {
       command = "cargo clippy --workspace --all-features -- -D warnings";
       description = "Strict lint with all features";
@@ -287,15 +279,14 @@ You can add:
 # Build the WASM bundle
 devenv tasks run build:transport-worker
 
-# Serve the dist dir with required headers
-devenv tasks run web:serve
+# Serve the dist dir with required headers (Node server)
+node tests/wasm_server.js
 ```
 
-The Rust dev server (`crates/dev_server`) injects `Cross-Origin-Opener-Policy: same-origin` and
+The Node dev server (`tests/wasm_server.js`) injects `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp`, so browsers unlock shared-array
 buffer and WebGPU paths needed for the emulator. Add assets (JS, wasm,
 textures) under `web/` as needed.
-Pass additional CLI flags to the dev server with `--`, e.g. `devenv tasks run web:serve -- --port 9090`.
 
 ---
 

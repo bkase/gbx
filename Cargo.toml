@@ -10,7 +10,6 @@ members = [
   "crates/app",
   "crates/mock",
   "crates/tests",
-  "crates/dev_server",
   "crates/transport-worker",
   "crates/transport-fabric",
   "crates/transport-codecs",
