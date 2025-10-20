@@ -19,7 +19,8 @@ use transport::schema::*;
 use transport::Envelope;
 use transport_fabric::{Codec, Encoded, FabricError, FabricResult};
 use world::{
-    AudioCmd, AudioRep, AudioSpan, FsCmd, FsRep, GpuCmd, GpuRep, KernelCmd, KernelRep, TickPurpose,
+    AudioCmd, AudioRep, AudioSpan, FsCmd, FsRep, GpuCmd, GpuRep, KernelCmd, KernelRep, SlotSpan,
+    TickPurpose,
 };
 
 /// Codec for kernel service commands and reports.
@@ -46,10 +47,17 @@ impl Codec for KernelCodec {
             KernelCmd::LoadRom { bytes, .. } => KernelCmdV1::LoadRom(KernelLoadRomCmdV1 {
                 bytes: bytes.iter().copied().collect(),
             }),
-            KernelCmd::SetInputs { .. } | KernelCmd::Terminate { .. } => {
-                return Err(FabricError::Unsupported(
-                    "kernel codec does not yet support SetInputs/Terminate",
-                ))
+            KernelCmd::SetInputs {
+                group,
+                lanes_mask,
+                joypad,
+            } => KernelCmdV1::SetInputs(KernelSetInputsCmdV1 {
+                group: *group,
+                lanes_mask: *lanes_mask,
+                joypad: *joypad,
+            }),
+            KernelCmd::Terminate { group } => {
+                KernelCmdV1::Terminate(KernelTerminateCmdV1 { group: *group })
             }
         };
         let payload = serialize(&schema)?;
@@ -76,6 +84,14 @@ impl Codec for KernelCodec {
                 group: 0,
                 bytes: load.bytes.as_slice().into(),
             }),
+            ArchivedKernelCmdV1::SetInputs(inputs) => Ok(KernelCmd::SetInputs {
+                group: inputs.group.to_native(),
+                lanes_mask: inputs.lanes_mask.to_native(),
+                joypad: inputs.joypad,
+            }),
+            ArchivedKernelCmdV1::Terminate(term) => Ok(KernelCmd::Terminate {
+                group: term.group.to_native(),
+            }),
         }
     }
 
@@ -86,16 +102,26 @@ impl Codec for KernelCodec {
                 purpose: TickPurposeV1::Display,
                 budget: 0,
             },
-            KernelRep::LaneFrame { lane, frame_id, .. } => KernelRepV1::LaneFrame {
+            KernelRep::LaneFrame {
+                lane,
+                frame_id,
+                span,
+                ..
+            } => KernelRepV1::LaneFrame {
                 lane: *lane,
                 frame_id: *frame_id,
+                span: encode_slot_span(span),
             },
             KernelRep::RomLoaded { bytes_len, .. } => KernelRepV1::RomLoaded {
                 bytes_len: *bytes_len as u32,
             },
-            KernelRep::AudioReady { .. } | KernelRep::DroppedThumb { .. } => {
+            KernelRep::AudioReady { group, span, .. } => KernelRepV1::AudioReady {
+                group: *group,
+                span: encode_audio_slot_span(span),
+            },
+            KernelRep::DroppedThumb { .. } => {
                 return Err(FabricError::Unsupported(
-                    "kernel codec does not yet support audio/thumb reports",
+                    "kernel codec does not yet support thumbnail reports",
                 ))
             }
         };
@@ -116,15 +142,23 @@ impl Codec for KernelCodec {
                 lanes_mask: 0,
                 cycles_done: 0,
             },
-            ArchivedKernelRepV1::LaneFrame { lane, frame_id } => KernelRep::LaneFrame {
+            ArchivedKernelRepV1::LaneFrame {
+                lane,
+                frame_id,
+                span,
+            } => KernelRep::LaneFrame {
                 group: 0,
                 lane: lane.to_native(),
-                span: default_frame_span(),
+                span: frame_span_from_slot(span),
                 frame_id: frame_id.to_native(),
             },
             ArchivedKernelRepV1::RomLoaded { bytes_len } => KernelRep::RomLoaded {
                 group: 0,
                 bytes_len: bytes_len.to_native() as usize,
+            },
+            ArchivedKernelRepV1::AudioReady { group, span } => KernelRep::AudioReady {
+                group: group.to_native(),
+                span: audio_span_from_slot(span),
             },
         };
         Ok(rep)
@@ -363,6 +397,58 @@ where
 /// Returns a default (empty) frame span placeholder.
 pub fn default_frame_span() -> world::FrameSpan {
     world::FrameSpan::default()
+}
+
+fn encode_slot_span(span: &world::FrameSpan) -> SlotSpanV1 {
+    match span.slot_span.as_ref() {
+        Some(slot) => SlotSpanV1 {
+            start_idx: slot.start_idx,
+            count: slot.count,
+        },
+        None => SlotSpanV1 {
+            start_idx: 0,
+            count: 0,
+        },
+    }
+}
+
+fn frame_span_from_slot(span: &ArchivedSlotSpanV1) -> world::FrameSpan {
+    let start_idx = span.start_idx.to_native();
+    let count = span.count.to_native();
+    let slot_span = if count == 0 {
+        None
+    } else {
+        Some(SlotSpan { start_idx, count })
+    };
+    let mut frame_span = default_frame_span();
+    frame_span.slot_span = slot_span;
+    frame_span
+}
+
+fn encode_audio_slot_span(span: &AudioSpan) -> SlotSpanV1 {
+    match span.slot_span.as_ref() {
+        Some(slot) => SlotSpanV1 {
+            start_idx: slot.start_idx,
+            count: slot.count,
+        },
+        None => SlotSpanV1 {
+            start_idx: 0,
+            count: 0,
+        },
+    }
+}
+
+fn audio_span_from_slot(span: &ArchivedSlotSpanV1) -> AudioSpan {
+    let start_idx = span.start_idx.to_native();
+    let count = span.count.to_native();
+    let slot_span = if count == 0 {
+        None
+    } else {
+        Some(SlotSpan { start_idx, count })
+    };
+    let mut audio_span = default_audio_span(0);
+    audio_span.slot_span = slot_span;
+    audio_span
 }
 
 fn default_audio_span(_frames: usize) -> AudioSpan {

@@ -10,6 +10,9 @@ crate-type = ["cdylib", "rlib"]
 # Core worker functionality (reusable, no app/hub dependencies)
 transport-worker = { path = "../transport-worker" }
 transport = { path = "../transport" }
+transport-codecs = { path = "../transport-codecs" }
+transport-fabric = { path = "../transport-fabric" }
+parking_lot = { workspace = true }
 
 # GBX-specific dependencies for test orchestration
 app = { path = "../app" }
@@ -17,6 +20,7 @@ hub = { path = "../hub" }
 mock = { path = "../mock" }
 world = { path = "../world" }
 services-transport = { path = "../services/services-transport" }
+transport-scenarios = { path = "../transport-scenarios" }
 
 # WASM bindings
 wasm-bindgen = "0.2.104"

@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use hub::{SubmitOutcome, SubmitPolicy};
@@ -16,6 +17,7 @@ enum Backend {
 pub struct SharedPort {
     policy: SubmitPolicy,
     backend: Backend,
+    metrics: PortMetrics,
 }
 
 impl SharedPort {
@@ -23,6 +25,7 @@ impl SharedPort {
         Arc::new(Self {
             policy,
             backend: Backend::MsgRing(Mutex::new(ring)),
+            metrics: PortMetrics::new(),
         })
     }
 
@@ -30,6 +33,7 @@ impl SharedPort {
         Arc::new(Self {
             policy: SubmitPolicy::Coalesce,
             backend: Backend::Mailbox(Mutex::new(mailbox)),
+            metrics: PortMetrics::new(),
         })
     }
 
@@ -52,6 +56,14 @@ impl SharedPort {
             Backend::Mailbox(mailbox) => PortLayout::Mailbox(mailbox.lock().wasm_layout()),
         }
     }
+
+    pub fn metrics(&self) -> PortMetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
+    fn record(&self, outcome: SubmitOutcome) {
+        self.metrics.record(outcome);
+    }
 }
 
 #[derive(Clone)]
@@ -61,7 +73,7 @@ pub struct ProducerPort {
 
 impl ProducerPort {
     pub fn try_send(&self, envelope: Envelope, payload: &[u8]) -> FabricResult<SubmitOutcome> {
-        match (&self.inner.backend, self.inner.policy) {
+        let result = match (&self.inner.backend, self.inner.policy) {
             (Backend::MsgRing(ring), SubmitPolicy::Lossless | SubmitPolicy::Must) => {
                 send_ring_lossless(&mut ring.lock(), envelope, payload)
             }
@@ -77,7 +89,17 @@ impl ProducerPort {
             (Backend::Mailbox(_), _) => Err(FabricError::InvalidConfig(
                 "mailbox backend only supports coalesce policy",
             )),
+        };
+
+        if let Ok(outcome) = &result {
+            self.inner.record(*outcome);
         }
+
+        result
+    }
+
+    pub fn metrics(&self) -> PortMetricsSnapshot {
+        self.inner.metrics()
     }
 }
 
@@ -121,6 +143,59 @@ impl ConsumerPort {
             }
         }
     }
+
+    pub fn metrics(&self) -> PortMetricsSnapshot {
+        self.inner.metrics()
+    }
+}
+
+#[derive(Default)]
+struct PortMetrics {
+    accepted: AtomicU32,
+    coalesced: AtomicU32,
+    dropped: AtomicU32,
+    would_block: AtomicU32,
+}
+
+impl PortMetrics {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn record(&self, outcome: SubmitOutcome) {
+        match outcome {
+            SubmitOutcome::Accepted => {
+                self.accepted.fetch_add(1, Ordering::Relaxed);
+            }
+            SubmitOutcome::Coalesced => {
+                self.coalesced.fetch_add(1, Ordering::Relaxed);
+            }
+            SubmitOutcome::Dropped => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            SubmitOutcome::WouldBlock => {
+                self.would_block.fetch_add(1, Ordering::Relaxed);
+            }
+            SubmitOutcome::Closed => {}
+        }
+    }
+
+    fn snapshot(&self) -> PortMetricsSnapshot {
+        PortMetricsSnapshot {
+            accepted: self.accepted.load(Ordering::Relaxed),
+            coalesced: self.coalesced.load(Ordering::Relaxed),
+            dropped: self.dropped.load(Ordering::Relaxed),
+            would_block: self.would_block.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PortMetricsSnapshot {
+    pub accepted: u32,
+    pub coalesced: u32,
+    pub dropped: u32,
+    pub would_block: u32,
 }
 
 fn send_ring_lossless(

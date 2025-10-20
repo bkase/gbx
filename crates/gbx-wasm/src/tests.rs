@@ -2,30 +2,23 @@
 
 use std::cell::RefCell;
 use std::convert::TryFrom;
-use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use futures::channel::oneshot;
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Object, Reflect};
-use transport::{Envelope, MsgRing, Record, SlotPool, SlotPoolConfig, SlotPop, TransportError};
-use transport_worker::types::{ScenarioStats, TestConfig, WorkerInitDescriptor};
+use parking_lot::Mutex;
+use rkyv::rancor::Error;
+use services_transport::TransportServices;
+use transport::{Envelope, MsgRing, Record, SlotPool, SlotPop};
+use transport_codecs::KernelCodec;
+use transport_fabric::{EndpointHandle, PortLayout, PortRole};
+use transport_scenarios::{EVENT_TAG, EVENT_VER};
+use transport_worker::types::{ScenarioStats, TestConfig};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{MessageEvent, Worker, WorkerOptions, WorkerType};
-
-const CMD_RING_CAPACITY: usize = 32 * 1024;
-const EVT_RING_CAPACITY: usize = 512 * 1024;
-const FRAME_SLOT_COUNT: usize = 8;
-const FRAME_SLOT_SIZE: usize = 128 * 1024;
-const AUDIO_SLOT_COUNT: usize = 16;
-const AUDIO_SLOT_SIZE: usize = 32 * 1024;
-
-const EVENT_ENVELOPE: Envelope = Envelope {
-    tag: 0x13,
-    ver: 1,
-    flags: 0,
-};
 
 macro_rules! ensure {
     ($cond:expr, $($arg:tt)*) => {
@@ -117,10 +110,10 @@ pub async fn wasm_transport_worker_burst_fairness() -> Result<(), JsValue> {
         "bursty events maintain ordering"
     );
     ensure!(
-        outcome.max_ready_depth <= FRAME_SLOT_COUNT,
+        outcome.max_ready_depth <= harness.frame_slot_count,
         "ready ring exceeded slot budget ({} > {})",
         outcome.max_ready_depth,
-        FRAME_SLOT_COUNT
+        harness.frame_slot_count
     );
     let result = ticket.wait().await?;
     ensure!(result.status == 0, "burst status {}", result.status);
@@ -191,20 +184,74 @@ struct BackpressureScenario {
 enum WorkerOp {
     Init = 0,
     RegisterTest = 1,
-    Run = 2,
+    #[allow(dead_code)]
+    RegisterServices = 2,
+    Run = 3,
 }
 
 struct TransportHarness {
     worker: Worker,
-    buffers: TransportBuffers,
+    _services: TransportServices,
+    kernel_endpoint: EndpointHandle<KernelCodec>,
+    event_ring: MsgRing,
+    frame_pool: Arc<Mutex<SlotPool>>,
+    audio_pool: Arc<Mutex<SlotPool>>,
+    frame_slot_count: usize,
+    _audio_slot_count: usize,
+    _layout_bytes: Vec<u8>,
 }
 
 impl TransportHarness {
     async fn new() -> Result<Self, JsValue> {
-        let buffers = TransportBuffers::new().map_err(|err| JsValue::from_str(&err.to_string()))?;
+        let services = TransportServices::new()
+            .map_err(|err| JsValue::from_str(&format!("transport services init failed: {err}")))?;
+        let kernel_endpoint = services.scheduler.kernel.clone();
+
+        let frame_pool = kernel_endpoint
+            .slot_pools()
+            .get(0)
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("missing frame slot pool"))?;
+        let audio_pool = kernel_endpoint
+            .slot_pools()
+            .get(1)
+            .cloned()
+            .ok_or_else(|| JsValue::from_str("missing audio slot pool"))?;
+
+        let frame_slot_count = {
+            let guard = frame_pool.lock();
+            guard.slot_count() as usize
+        };
+        let audio_slot_count = {
+            let guard = audio_pool.lock();
+            guard.slot_count() as usize
+        };
+
+        let layout_bytes = rkyv::to_bytes::<Error>(&services.worker.layout)
+            .map_err(|err| JsValue::from_str(&format!("serialize layout failed: {err}")))?
+            .into_vec();
+
+        let kernel_layout = services
+            .worker
+            .layout
+            .endpoints
+            .get(0)
+            .expect("kernel endpoint layout missing");
+        let replies_layout = kernel_layout
+            .ports
+            .iter()
+            .find_map(|(role, layout)| match (role, layout) {
+                (PortRole::Replies, PortLayout::MsgRing(ring_layout)) => Some(*ring_layout),
+                _ => None,
+            })
+            .expect("kernel replies layout missing");
+        let event_ring = unsafe { MsgRing::from_wasm_layout(replies_layout, EVENT_ENVELOPE) };
+
         let memory = shared_memory()?;
         let worker = spawn_worker()?;
-        let init_msg = make_init_message(buffers.descriptor_ptr(), &memory)?;
+        let layout_ptr = ptr_from_bytes(&layout_bytes);
+        let layout_len = layout_bytes.len() as u32;
+        let init_msg = make_init_message(layout_ptr, layout_len, &memory)?;
         let ticket = WorkerTicket::new(worker.clone(), init_msg)?;
         let status = ticket.wait_status().await?;
         if status != 0 {
@@ -213,7 +260,17 @@ impl TransportHarness {
             )));
         }
 
-        Ok(Self { worker, buffers })
+        Ok(Self {
+            worker,
+            _services: services,
+            kernel_endpoint,
+            event_ring,
+            frame_pool,
+            audio_pool,
+            frame_slot_count,
+            _audio_slot_count: audio_slot_count,
+            _layout_bytes: layout_bytes,
+        })
     }
 
     fn start_flood(&self, frame_count: usize) -> Result<FabricTestRunner, JsValue> {
@@ -245,38 +302,44 @@ impl TransportHarness {
         let mut max_ready_depth = 0usize;
 
         while frames.len() < target {
-            while let SlotPop::Ok { slot_idx } = self.buffers.frame_pool.pop_ready() {
-                let frame_id = read_frame_slot(&mut self.buffers.frame_pool, slot_idx);
-                frames.push(frame_id);
-                self.buffers.frame_pool.release_free(slot_idx);
+            {
+                let mut frame_pool = self.frame_pool.lock();
+                while let SlotPop::Ok { slot_idx } = frame_pool.pop_ready() {
+                    let frame_id = read_frame_slot(&mut *frame_pool, slot_idx);
+                    frames.push(frame_id);
+                    frame_pool.release_free(slot_idx);
+                }
+
+                let in_use = frame_pool.slot_count() as usize - frame_pool.free_len() as usize;
+                max_ready_depth = max_ready_depth.max(in_use);
             }
 
             let mut drained = 0usize;
             while drained < budget {
-                if let Some(record) = self.buffers.evt_ring.consumer_peek() {
+                if let Some(record) = self.event_ring.consumer_peek() {
                     events.push(parse_event_record(&record));
                     drained += 1;
-                    self.buffers.evt_ring.consumer_pop_advance();
+                    self.event_ring.consumer_pop_advance();
                 } else {
                     break;
                 }
             }
 
-            let in_use = self.buffers.frame_pool.slot_count() as usize
-                - self.buffers.frame_pool.free_len() as usize;
-            max_ready_depth = max_ready_depth.max(in_use);
             TimeoutFuture::new(0).await;
         }
 
-        while let SlotPop::Ok { slot_idx } = self.buffers.frame_pool.pop_ready() {
-            let frame_id = read_frame_slot(&mut self.buffers.frame_pool, slot_idx);
-            frames.push(frame_id);
-            self.buffers.frame_pool.release_free(slot_idx);
+        {
+            let mut frame_pool = self.frame_pool.lock();
+            while let SlotPop::Ok { slot_idx } = frame_pool.pop_ready() {
+                let frame_id = read_frame_slot(&mut *frame_pool, slot_idx);
+                frames.push(frame_id);
+                frame_pool.release_free(slot_idx);
+            }
         }
 
-        while let Some(record) = self.buffers.evt_ring.consumer_peek() {
+        while let Some(record) = self.event_ring.consumer_peek() {
             events.push(parse_event_record(&record));
-            self.buffers.evt_ring.consumer_pop_advance();
+            self.event_ring.consumer_pop_advance();
         }
 
         Ok(DrainOutcome {
@@ -287,27 +350,40 @@ impl TransportHarness {
     }
 
     fn assert_reconciliation(&self) -> Result<(), JsValue> {
+        {
+            let pool = self.frame_pool.lock();
+            ensure!(
+                pool.free_len() == pool.slot_count(),
+                "all frame slots should be free (free={}, total={})",
+                pool.free_len(),
+                pool.slot_count()
+            );
+            ensure!(pool.ready_len() == 0, "ready ring drained");
+        }
+        {
+            let pool = self.audio_pool.lock();
+            ensure!(
+                pool.free_len() == pool.slot_count(),
+                "audio slots remain unused and free (free={}, total={})",
+                pool.free_len(),
+                pool.slot_count()
+            );
+            ensure!(
+                pool.ready_len() == 0,
+                "audio ready ring should remain empty"
+            );
+        }
         ensure!(
-            self.buffers.frame_pool.free_len() == self.buffers.frame_pool.slot_count(),
-            "all frame slots should be free (free={}, total={})",
-            self.buffers.frame_pool.free_len(),
-            self.buffers.frame_pool.slot_count()
-        );
-        ensure!(
-            self.buffers.frame_pool.ready_len() == 0,
-            "ready ring drained"
-        );
-        ensure!(
-            self.buffers.evt_ring.consumer_peek().is_none(),
+            self.event_ring.consumer_peek().is_none(),
             "event ring should be empty after drain"
         );
+        let remaining = self
+            .kernel_endpoint
+            .drain_reports(usize::MAX)
+            .map_err(|err| JsValue::from_str(&format!("kernel drain_reports failed: {err}")))?;
         ensure!(
-            self.buffers.audio_pool.free_len() == self.buffers.audio_pool.slot_count(),
-            "audio slots remain unused and free"
-        );
-        ensure!(
-            self.buffers.audio_pool.ready_len() == 0,
-            "audio ready ring should remain empty"
+            remaining.is_empty(),
+            "kernel reply ring should be empty after drain"
         );
         Ok(())
     }
@@ -317,56 +393,6 @@ struct DrainOutcome {
     frames: Vec<u32>,
     events: Vec<u32>,
     max_ready_depth: usize,
-}
-
-#[allow(dead_code)]
-struct TransportBuffers {
-    cmd_ring: MsgRing,
-    evt_ring: MsgRing,
-    frame_pool: SlotPool,
-    audio_pool: SlotPool,
-    descriptor: NonNull<WorkerInitDescriptor>,
-}
-
-impl TransportBuffers {
-    fn new() -> Result<Self, TransportError> {
-        let cmd_ring = MsgRing::new(CMD_RING_CAPACITY, Envelope::new(0x01, 1))?;
-        let evt_ring = MsgRing::new(EVT_RING_CAPACITY, EVENT_ENVELOPE)?;
-        let frame_pool = SlotPool::new(SlotPoolConfig {
-            slot_count: FRAME_SLOT_COUNT as u32,
-            slot_size: FRAME_SLOT_SIZE,
-        })?;
-        let audio_pool = SlotPool::new(SlotPoolConfig {
-            slot_count: AUDIO_SLOT_COUNT as u32,
-            slot_size: AUDIO_SLOT_SIZE,
-        })?;
-        let descriptor = Box::new(WorkerInitDescriptor {
-            cmd_ring: cmd_ring.wasm_layout(),
-            evt_ring: evt_ring.wasm_layout(),
-            frame_pool: frame_pool.wasm_layout(),
-            audio_pool: audio_pool.wasm_layout(),
-        });
-        let descriptor = unsafe { NonNull::new_unchecked(Box::into_raw(descriptor)) };
-        Ok(Self {
-            cmd_ring,
-            evt_ring,
-            frame_pool,
-            audio_pool,
-            descriptor,
-        })
-    }
-
-    fn descriptor_ptr(&self) -> u32 {
-        ptr_u32(unsafe { self.descriptor.as_ref() })
-    }
-}
-
-impl Drop for TransportBuffers {
-    fn drop(&mut self) {
-        unsafe {
-            drop(Box::from_raw(self.descriptor.as_ptr()));
-        }
-    }
 }
 
 #[allow(dead_code)]
@@ -548,12 +574,14 @@ fn spawn_worker() -> Result<Worker, JsValue> {
 }
 
 fn make_init_message(
-    descriptor_ptr: u32,
+    layout_ptr: u32,
+    layout_len: u32,
     memory: &js_sys::WebAssembly::Memory,
 ) -> Result<JsValue, JsValue> {
     let msg = Object::new();
     set_u32(&msg, "op", WorkerOp::Init as u32)?;
-    set_u32(&msg, "descriptorPtr", descriptor_ptr)?;
+    set_u32(&msg, "layoutPtr", layout_ptr)?;
+    set_u32(&msg, "layoutLen", layout_len)?;
     Reflect::set(&msg, &JsValue::from_str("memory"), memory)?;
     Ok(msg.into())
 }
@@ -598,6 +626,11 @@ fn ptr_u32<T>(value: &T) -> u32 {
     u32::try_from(addr).expect("wasm pointers fit in u32")
 }
 
+fn ptr_from_bytes(bytes: &[u8]) -> u32 {
+    let addr = bytes.as_ptr() as usize;
+    u32::try_from(addr).expect("wasm pointers fit in u32")
+}
+
 fn parse_event_record(record: &Record<'_>) -> u32 {
     const FRAME_ID_BYTES: usize = 4;
     if record.payload.len() < FRAME_ID_BYTES {
@@ -615,3 +648,8 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     let slice = &bytes[offset..offset + 4];
     u32::from_le_bytes(slice.try_into().expect("slice length is 4"))
 }
+const EVENT_ENVELOPE: Envelope = Envelope {
+    tag: EVENT_TAG,
+    ver: EVENT_VER,
+    flags: 0,
+};

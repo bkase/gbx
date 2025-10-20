@@ -6,7 +6,7 @@ use transport::SlotPool;
 
 use crate::codec::Codec;
 use crate::error::{FabricError, FabricResult};
-use crate::port::{ConsumerPort, ProducerPort};
+use crate::port::{ConsumerPort, PortMetricsSnapshot, ProducerPort};
 
 /// Handle exposed to the scheduler for submitting commands and draining reports.
 #[derive(Clone)]
@@ -51,6 +51,16 @@ impl<C: Codec> EndpointHandle<C> {
     pub fn slot_pools(&self) -> &[Arc<Mutex<SlotPool>>] {
         &self.slot_pools
     }
+
+    /// Returns per-port metrics for this endpoint.
+    pub fn metrics(&self) -> EndpointMetrics {
+        EndpointMetrics {
+            lossless: self.lossless.as_ref().map(ProducerPort::metrics),
+            besteffort: self.besteffort.as_ref().map(ProducerPort::metrics),
+            coalesce: self.coalesce.as_ref().map(ProducerPort::metrics),
+            replies: self.replies.metrics(),
+        }
+    }
 }
 
 /// Worker-facing endpoint used by service engines inside the runtime.
@@ -65,6 +75,24 @@ pub struct WorkerEndpoint<C: Codec> {
 }
 
 impl<C: Codec> WorkerEndpoint<C> {
+    pub fn new(
+        lossless: Option<ConsumerPort>,
+        besteffort: Option<ConsumerPort>,
+        coalesce: Option<ConsumerPort>,
+        replies: ProducerPort,
+        slot_pools: Vec<Arc<Mutex<SlotPool>>>,
+        codec: C,
+    ) -> Self {
+        Self {
+            lossless,
+            besteffort,
+            coalesce,
+            replies,
+            slot_pools,
+            codec,
+        }
+    }
+
     pub fn drain_commands<F>(&self, max: usize, mut f: F) -> FabricResult<usize>
     where
         F: FnMut(&C::Cmd),
@@ -143,6 +171,14 @@ impl<C: Codec> ServiceAdapter<C> {
     pub fn new(handle: EndpointHandle<C>) -> Self {
         Self { handle }
     }
+}
+
+/// Aggregated metrics across an endpoint's ports.
+pub struct EndpointMetrics {
+    pub lossless: Option<PortMetricsSnapshot>,
+    pub besteffort: Option<PortMetricsSnapshot>,
+    pub coalesce: Option<PortMetricsSnapshot>,
+    pub replies: PortMetricsSnapshot,
 }
 
 impl<C: Codec + Send + Sync + 'static> Service for ServiceAdapter<C> {

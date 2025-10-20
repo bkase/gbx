@@ -22,6 +22,7 @@ use transport_fabric::{
 pub struct TransportServices {
     pub hub: ServicesHub,
     pub worker: WorkerTopology,
+    pub scheduler: SchedulerTopology,
 }
 
 pub struct WorkerTopology {
@@ -30,6 +31,13 @@ pub struct WorkerTopology {
     pub gpu: WorkerEndpoint<GpuCodec>,
     pub audio: WorkerEndpoint<AudioCodec>,
     pub layout: FabricLayout,
+}
+
+pub struct SchedulerTopology {
+    pub kernel: EndpointHandle<KernelCodec>,
+    pub fs: EndpointHandle<FsCodec>,
+    pub gpu: EndpointHandle<GpuCodec>,
+    pub audio: EndpointHandle<AudioCodec>,
 }
 
 impl TransportServices {
@@ -74,7 +82,7 @@ impl TransportServices {
                 },
             ],
         };
-        let (kernel, kernel_worker, _kernel_layout) = build_service(kernel_spec)?;
+        let (kernel_endpoint, kernel_worker, _kernel_layout) = build_service(kernel_spec)?;
         #[cfg(target_arch = "wasm32")]
         layout.add_endpoint(_kernel_layout);
 
@@ -93,7 +101,7 @@ impl TransportServices {
             reply_policy: SubmitPolicy::Lossless,
             slot_pools: vec![],
         };
-        let (fs, fs_worker, _fs_layout) = build_service(fs_spec)?;
+        let (fs_endpoint, fs_worker, _fs_layout) = build_service(fs_spec)?;
         #[cfg(target_arch = "wasm32")]
         layout.add_endpoint(_fs_layout);
 
@@ -112,7 +120,7 @@ impl TransportServices {
             reply_policy: SubmitPolicy::Lossless,
             slot_pools: vec![],
         };
-        let (gpu, gpu_worker, _gpu_layout) = build_service(gpu_spec)?;
+        let (gpu_endpoint, gpu_worker, _gpu_layout) = build_service(gpu_spec)?;
         #[cfg(target_arch = "wasm32")]
         layout.add_endpoint(_gpu_layout);
 
@@ -131,7 +139,7 @@ impl TransportServices {
             reply_policy: SubmitPolicy::Lossless,
             slot_pools: vec![],
         };
-        let (audio, audio_worker, _audio_layout) = build_service(audio_spec)?;
+        let (audio_endpoint, audio_worker, _audio_layout) = build_service(audio_spec)?;
         #[cfg(target_arch = "wasm32")]
         layout.add_endpoint(_audio_layout);
 
@@ -144,14 +152,25 @@ impl TransportServices {
         };
 
         let hub = ServicesHubBuilder::new()
-            .kernel(kernel_handle(kernel))
-            .fs(fs_handle(fs))
-            .gpu(gpu_handle(gpu))
-            .audio(audio_handle(audio))
+            .kernel(kernel_handle(kernel_endpoint.clone()))
+            .fs(fs_handle(fs_endpoint.clone()))
+            .gpu(gpu_handle(gpu_endpoint.clone()))
+            .audio(audio_handle(audio_endpoint.clone()))
             .build()
             .expect("transport services hub build");
 
-        Ok(Self { hub, worker })
+        let scheduler = SchedulerTopology {
+            kernel: kernel_endpoint,
+            fs: fs_endpoint,
+            gpu: gpu_endpoint,
+            audio: audio_endpoint,
+        };
+
+        Ok(Self {
+            hub,
+            worker,
+            scheduler,
+        })
     }
 }
 
