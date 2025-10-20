@@ -31,6 +31,20 @@ fn transport_schema_goldens_v1() {
     );
 
     assert_golden(
+        "kernel_cmd_set_inputs_v1",
+        &KernelCmdV1::SetInputs(KernelSetInputsCmdV1 {
+            group: 2,
+            lanes_mask: 0x00FF_FFFF,
+            joypad: 0b1010_1100,
+        }),
+    );
+
+    assert_golden(
+        "kernel_cmd_terminate_v1",
+        &KernelCmdV1::Terminate(KernelTerminateCmdV1 { group: 9 }),
+    );
+
+    assert_golden(
         "kernel_rep_tick_done_v1",
         &KernelRepV1::TickDone {
             purpose: TickPurposeV1::Exploration,
@@ -43,12 +57,27 @@ fn transport_schema_goldens_v1() {
         &KernelRepV1::LaneFrame {
             lane: 3,
             frame_id: 0x0123_4567_89AB_CDEF,
+            span: SlotSpanV1 {
+                start_idx: 11,
+                count: 2,
+            },
         },
     );
 
     assert_golden(
         "kernel_rep_rom_loaded_v1",
         &KernelRepV1::RomLoaded { bytes_len: 65_536 },
+    );
+
+    assert_golden(
+        "kernel_rep_audio_ready_v1",
+        &KernelRepV1::AudioReady {
+            group: 1,
+            span: SlotSpanV1 {
+                start_idx: 4,
+                count: 3,
+            },
+        },
     );
 
     assert_golden(

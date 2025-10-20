@@ -1,14 +1,15 @@
 import init, {
   fabric_worker_init,
   fabric_worker_run,
-  worker_init,
+  worker_register_services,
   worker_register_test
 } from './transport_worker.js';
 
 const Op = {
   Init: 0,
   RegisterTest: 1,
-  Run: 2,
+  RegisterServices: 2,
+  Run: 3,
 };
 
 let initialized = false;
@@ -20,7 +21,7 @@ self.onmessage = async (event) => {
 
   try {
     if (op === Op.Init) {
-      const { memory, descriptorPtr, layoutPtr, layoutLen } = data;
+      const { memory, layoutPtr = 0, layoutLen = 0 } = data;
 
       // Initialize WASM module if needed
       if (!initialized) {
@@ -31,20 +32,8 @@ self.onmessage = async (event) => {
       }
 
       // Initialize fabric runtime (unified path for all scenarios)
-      let status;
-      if (layoutPtr !== undefined && layoutLen !== undefined) {
-        // New fabric path: init with FabricLayout
-        console.log(`Worker: Fabric init with layoutPtr=${layoutPtr}, layoutLen=${layoutLen}`);
-        status = fabric_worker_init(layoutPtr >>> 0, layoutLen >>> 0);
-      } else if (descriptorPtr !== undefined) {
-        // Legacy test path: init with WorkerInitDescriptor
-        console.log(`Worker: Legacy init with descriptorPtr=${descriptorPtr}`);
-        status = worker_init(descriptorPtr >>> 0);
-      } else {
-        // Empty fabric init
-        console.log("Worker: Empty fabric init");
-        status = fabric_worker_init(0, 0);
-      }
+      console.log(`Worker: Fabric init with layoutPtr=${layoutPtr}, layoutLen=${layoutLen}`);
+      const status = fabric_worker_init(layoutPtr >>> 0, layoutLen >>> 0);
 
       console.log(`Worker: initialization status=${status}`);
       postMessage({ op, status });
@@ -58,6 +47,15 @@ self.onmessage = async (event) => {
       const configPtr = data.configPtr >>> 0;
       const statsPtr = data.statsPtr >>> 0;
       const status = worker_register_test(configPtr, statsPtr);
+      postMessage({ op, status });
+    } else if (op === Op.RegisterServices) {
+      if (!initialized) {
+        postMessage({ op, status: -3 });
+        return;
+      }
+
+      const { layoutPtr = 0, layoutLen = 0 } = data;
+      const status = worker_register_services(layoutPtr >>> 0, layoutLen >>> 0);
       postMessage({ op, status });
     } else if (op === Op.Run) {
       // Run fabric worker tick

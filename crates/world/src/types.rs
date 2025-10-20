@@ -55,6 +55,15 @@ pub enum IntentPriority {
     P2,
 }
 
+/// Describes a contiguous range of slots within a transport pool.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlotSpan {
+    /// Starting slot index within the pool.
+    pub start_idx: u32,
+    /// Number of contiguous slots in this span.
+    pub count: u32,
+}
+
 /// Image span produced by the kernel for presentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrameSpan {
@@ -64,6 +73,8 @@ pub struct FrameSpan {
     pub height: u16,
     /// Raw RGBA pixels (row-major).
     pub pixels: Arc<[u8]>,
+    /// Optional slot span referencing transport-managed memory.
+    pub slot_span: Option<SlotSpan>,
 }
 
 impl FrameSpan {
@@ -73,6 +84,7 @@ impl FrameSpan {
             width: 0,
             height: 0,
             pixels: Arc::from([]),
+            slot_span: None,
         }
     }
 }
@@ -92,6 +104,8 @@ pub struct AudioSpan {
     pub channels: u8,
     /// Sample rate in Hertz.
     pub sample_rate_hz: u32,
+    /// Optional slot span referencing transport-managed memory.
+    pub slot_span: Option<SlotSpan>,
 }
 
 impl AudioSpan {
@@ -101,6 +115,7 @@ impl AudioSpan {
             samples: Arc::from([]),
             channels: 2,
             sample_rate_hz: 48_000,
+            slot_span: None,
         }
     }
 }

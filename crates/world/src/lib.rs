@@ -17,7 +17,7 @@ pub use crate::reduce_intent::IntentReducer;
 pub use crate::reduce_report::ReportReducer;
 pub use crate::types::{
     AudioCmd, AudioRep, AudioSpan, AvCmd, FollowUps, FrameSpan, FsCmd, FsRep, GpuCmd, GpuRep,
-    Intent, IntentPriority, KernelCmd, KernelRep, Report, SubmitOutcome, SubmitPolicy, TickPurpose,
-    WorkCmd,
+    Intent, IntentPriority, KernelCmd, KernelRep, Report, SlotSpan, SubmitOutcome, SubmitPolicy,
+    TickPurpose, WorkCmd,
 };
 pub use crate::world::{World, WorldHealth, WorldPerf};

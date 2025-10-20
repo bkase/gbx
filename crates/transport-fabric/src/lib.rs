@@ -15,5 +15,6 @@ pub use codec::{Codec, Encoded};
 pub use endpoint::{EndpointHandle, ServiceAdapter, WorkerEndpoint};
 pub use error::{FabricError, FabricResult};
 pub use layout::{ArchivedFabricLayout, EndpointLayout, FabricLayout, PortLayout, PortRole};
+pub use port::{make_port_pair_mailbox, make_port_pair_ring};
 pub use runtime::{ServiceEngine, WorkerRuntime};
 pub use span::SlotSpan;

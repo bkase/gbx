@@ -15,9 +15,7 @@
 pub use transport_worker::{fabric_worker_init, fabric_worker_run};
 
 // Test scenario worker functions (built on fabric layer)
-pub use transport_worker::{
-    worker_init, worker_register_test, ScenarioStats, TestConfig, TestType, WorkerInitDescriptor,
-};
+pub use transport_worker::{worker_register_test, ScenarioStats, TestConfig};
 
 // Re-export types for convenience
 pub use transport_worker::{EndpointLayout, FabricLayout, PortLayout, PortRole};

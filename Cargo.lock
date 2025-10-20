@@ -432,9 +432,13 @@ dependencies = [
  "hub",
  "js-sys",
  "mock",
+ "parking_lot",
  "rkyv",
  "services-transport",
  "transport",
+ "transport-codecs",
+ "transport-fabric",
+ "transport-scenarios",
  "transport-worker",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1231,9 +1235,12 @@ dependencies = [
  "hub",
  "js-sys",
  "mock",
+ "parking_lot",
  "rkyv",
  "services-transport",
  "transport",
+ "transport-fabric",
+ "transport-scenarios",
  "transport-worker",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1492,13 +1499,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "transport-scenarios"
+version = "0.1.0"
+dependencies = [
+ "hub",
+ "parking_lot",
+ "transport",
+ "transport-fabric",
+]
+
+[[package]]
 name = "transport-worker"
 version = "0.1.0"
 dependencies = [
+ "hub",
  "js-sys",
+ "parking_lot",
  "rkyv",
+ "services-audio",
+ "services-fs",
+ "services-gpu",
+ "services-kernel",
  "transport",
+ "transport-codecs",
  "transport-fabric",
+ "transport-scenarios",
  "wasm-bindgen",
  "web-sys",
 ]
