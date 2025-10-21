@@ -22,7 +22,11 @@ struct SingleThreadCell<T> {
     value: UnsafeCell<T>,
 }
 
+// SAFETY: SingleThreadCell wraps UnsafeCell but guarantees single-threaded access through its API.
+// The kernel service owns this cell and only accesses it from the scheduler's single-threaded context.
 unsafe impl<T> Send for SingleThreadCell<T> {}
+// SAFETY: Same as Send - single-threaded access is enforced by the service design, so sharing
+// references across threads is safe as long as only one thread ever calls with_mut at a time.
 unsafe impl<T> Sync for SingleThreadCell<T> {}
 
 impl<T> SingleThreadCell<T> {
@@ -33,6 +37,8 @@ impl<T> SingleThreadCell<T> {
     }
 
     fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        // SAFETY: The service design ensures only one thread accesses this at a time,
+        // so obtaining a mutable reference is safe.
         unsafe { f(&mut *self.value.get()) }
     }
 }

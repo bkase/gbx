@@ -43,6 +43,12 @@ pub struct Flags<M: MaskValue> {
     c: M,
 }
 
+impl<M: MaskValue> Default for Flags<M> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<M: MaskValue> Flags<M> {
     /// Creates flags with all bits cleared.
     #[inline]
@@ -229,8 +235,6 @@ impl Exec for Scalar {
 
     #[inline]
     fn add8(a: Self::U8, b: Self::U8, carry: bool, f: &mut Flags<Self::Mask>) -> Self::U8 {
-        let a = a;
-        let b = b;
         let cin = if carry { 1 } else { 0 };
         let sum = a.wrapping_add(b).wrapping_add(cin);
         let half = ((a ^ b ^ sum) & 0x10) != 0;
@@ -245,8 +249,6 @@ impl Exec for Scalar {
 
     #[inline]
     fn sub8(a: Self::U8, b: Self::U8, borrow: bool, f: &mut Flags<Self::Mask>) -> Self::U8 {
-        let a = a;
-        let b = b;
         let cin = if borrow { 1 } else { 0 };
         let diff = a.wrapping_sub(b).wrapping_sub(cin);
         let half = ((a ^ b ^ diff) & 0x10) != 0;

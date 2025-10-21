@@ -8,6 +8,8 @@ struct TransportLease {
     ptr: *mut [u8],
 }
 
+// SAFETY: TransportLease holds a raw pointer to a heap-allocated buffer that it owns exclusively.
+// The buffer is created via Box and converted to raw pointer, ensuring proper ownership transfer.
 unsafe impl Send for TransportLease {}
 
 /// Frame sink backed by a transport slot pool.
@@ -38,6 +40,7 @@ impl TransportFrameSink {
         (self.width, self.height)
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub fn acquire_frame(&self) -> Option<(u32, &mut [u8])> {
         let slot_idx = self.pool.with_mut(|pool| pool.try_acquire_free())?;
         let slot_size = self.pool.with_ref(|pool| pool.slot_size());
@@ -47,14 +50,15 @@ impl TransportFrameSink {
         let ptr = Box::into_raw(buffer);
 
         if self.active.borrow().is_some() {
+            // SAFETY: ptr was created via Box::into_raw above, so it's valid to reconstruct and drop.
             unsafe {
                 drop(Box::from_raw(ptr));
             }
             return None;
         }
 
+        // SAFETY: pointer originates from `Box::into_raw` above.
         unsafe {
-            // SAFETY: pointer originates from `Box::into_raw` above.
             let slice = &mut *ptr;
             self.active
                 .borrow_mut()
@@ -71,10 +75,8 @@ impl TransportFrameSink {
             .expect("publish without matching acquire");
         assert_eq!(lease.slot_idx, slot_idx, "slot mismatch in publish");
 
-        let buffer = unsafe {
-            // SAFETY: lease pointer is owned by the frame sink and not used elsewhere.
-            Box::from_raw(lease.ptr)
-        };
+        // SAFETY: lease pointer is owned by the frame sink and not used elsewhere.
+        let buffer = unsafe { Box::from_raw(lease.ptr) };
         let copy_len = written_len.min(buffer.len());
 
         let push_outcome = self.pool.with_mut(|pool| {

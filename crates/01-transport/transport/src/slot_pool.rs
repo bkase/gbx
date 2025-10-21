@@ -271,6 +271,8 @@ pub struct SlotPoolHandle {
 // atomics for ring coordination; marking the handle as `Send`/`Sync` allows it to be moved between
 // threads while callers uphold the single-threaded access contract.
 unsafe impl Send for SlotPoolHandle {}
+// SAFETY: Same as `Send` - single-threaded access is guaranteed by the transport design, and the
+// interior atomics make cross-thread coordination safe.
 unsafe impl Sync for SlotPoolHandle {}
 
 impl SlotPoolHandle {

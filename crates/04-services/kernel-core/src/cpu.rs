@@ -19,6 +19,12 @@ pub struct Cpu<E: Exec> {
     pub enable_ime_pending: bool,
 }
 
+impl<E: Exec> Default for Cpu<E> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<E: Exec> Cpu<E> {
     /// Creates a CPU with power-on defaults.
     pub fn new() -> Self {

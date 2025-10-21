@@ -59,6 +59,12 @@ pub struct IoRegs {
     regs: [u8; 0x80],
 }
 
+impl Default for IoRegs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IoRegs {
     pub const JOYP: usize = 0x00;
     pub const DIV: usize = 0x04;
