@@ -84,10 +84,28 @@ impl KernelService {
                     let mut frame_id = self.next_frame_id.lock();
                     let current_id = (*frame_id).wrapping_add(1);
                     *frame_id = current_id;
+
+                    // Generate checkerboard frame pixels (160x144 RGBA)
+                    const W: u16 = 160;
+                    const H: u16 = 144;
+                    let buffer_size = gbx_frame::FRAME_HEADER + (W as usize) * (H as usize) * 4;
+                    let mut buffer = vec![0u8; buffer_size];
+                    let ok =
+                        gbx_frame::write_checkerboard_rgba(&mut buffer, current_id as u32, W, H);
+                    debug_assert!(ok, "checkerboard write should succeed");
+
+                    // Skip the 8-byte header since FrameSpan.pixels is just the pixel data
+                    let pixel_data = &buffer[gbx_frame::FRAME_HEADER..];
+
                     reports.push(KernelRep::LaneFrame {
                         group: *group,
                         lane: 0,
-                        span: FrameSpan::default(),
+                        span: FrameSpan {
+                            width: W,
+                            height: H,
+                            pixels: Arc::from(pixel_data),
+                            slot_span: None,
+                        },
                         frame_id: current_id,
                     });
                 }

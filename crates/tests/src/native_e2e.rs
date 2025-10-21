@@ -170,6 +170,13 @@ impl FabricHandle for NativeFabricHandle {
     fn wait_for_event_space(&self) {
         thread::yield_now();
     }
+
+    fn with_frame_slot_mut<R>(&mut self, slot_idx: u32, f: impl FnOnce(&mut [u8]) -> R) -> R {
+        self.frame_pool.with_mut(|pool| {
+            let slot = pool.slot_mut(slot_idx);
+            f(slot)
+        })
+    }
 }
 
 struct FrameConsumer {

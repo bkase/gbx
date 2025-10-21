@@ -16,6 +16,7 @@ members = [
   "crates/transport-scenarios",
   "crates/services/services-transport",
   "crates/gbx-wasm",
+  "crates/gbx-frame",
 ]
 resolver = "2"
 

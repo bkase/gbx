@@ -201,12 +201,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gbx-frame"
+version = "0.1.0"
+
+[[package]]
 name = "gbx-wasm"
 version = "0.1.0"
 dependencies = [
  "app",
  "bytecheck",
  "futures",
+ "gbx-frame",
  "gloo-timers",
  "hub",
  "js-sys",
@@ -729,6 +734,7 @@ dependencies = [
 name = "services-kernel"
 version = "0.1.0"
 dependencies = [
+ "gbx-frame",
  "hub",
  "parking_lot",
  "smallvec",
@@ -796,6 +802,7 @@ dependencies = [
  "app",
  "bytecheck",
  "futures",
+ "gbx-frame",
  "gloo-timers",
  "hub",
  "js-sys",

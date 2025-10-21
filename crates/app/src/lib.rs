@@ -125,4 +125,30 @@ impl Scheduler {
         self.process_intents();
         self.process_reports();
     }
+
+    /// Runs one scheduling step and returns the Reports (still reduced for world state).
+    pub fn run_once_collect(&mut self) -> Vec<world::Report> {
+        self.process_intents();
+        let reports = self.hub.drain_reports(self.report_budget);
+        for rep in reports.iter().cloned() {
+            let follow_ups = self.world.reduce_report(rep);
+            for av in follow_ups.immediate_av {
+                let policy = av.default_policy(self.world.display_lane);
+                let outcome = self.hub.try_submit_av(av);
+                if matches!(
+                    outcome,
+                    hub::SubmitOutcome::WouldBlock | hub::SubmitOutcome::Closed
+                ) && matches!(
+                    policy,
+                    hub::SubmitPolicy::Must | hub::SubmitPolicy::Lossless
+                ) {
+                    // No retry path for A/V yet; a real implementation would surface this via health flags.
+                }
+            }
+            for (priority, intent) in follow_ups.deferred_intents {
+                self.enqueue_intent(priority, intent);
+            }
+        }
+        reports
+    }
 }

@@ -129,6 +129,11 @@ mod wasm {
         fn wait_for_event_space(&self) {
             self.evt_ring.wait_for_space();
         }
+
+        fn with_frame_slot_mut<R>(&mut self, slot_idx: u32, f: impl FnOnce(&mut [u8]) -> R) -> R {
+            let slot = self.frame_pool.slot_mut(slot_idx);
+            f(slot)
+        }
     }
 
     thread_local! {

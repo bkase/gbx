@@ -185,13 +185,10 @@ in {
   tasks."test:wasm-smoke".exec = ''
     set -euo pipefail
 
-    # Build the transport-worker using wasm-pack
     echo "Building transport-worker with wasm-pack..."
     devenv tasks run build:transport-worker
 
-    # gbx-wasm contains both worker functions (re-exported from transport-worker) AND test orchestration
-    # So we just build it once and use those artifacts directly
-    echo "Copying gbx-wasm artifacts (transport-worker + tests) to tests/wasm/pkg..."
+    echo "Copying artifacts to tests/wasm/pkg..."
     rm -rf tests/wasm/pkg
     mkdir -p tests/wasm/pkg
     cp web/pkg/transport_worker.js tests/wasm/pkg/
@@ -201,26 +198,22 @@ in {
     cp web/worker.js tests/wasm/pkg/
 
     npm install --silent >/dev/null
-
-    export WASM_TEST_PORT=4510
-    node tests/wasm_server.js &
-    SERVER_PID=$!
-    trap "kill $SERVER_PID 2>/dev/null || true" EXIT
-
-    sleep 3
-
-    node tests/wasm_browser_test.js
+    bash scripts/run-browser-test.sh tests/wasm 4510 tests/wasm_browser_test.js
   '';
 
   tasks."test:wasm-light".exec = ''
-    export WASM_TEST_PORT=4510
-    node tests/wasm_server.js &
-    SERVER_PID=$!
-    trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+    npm install --silent >/dev/null
+    bash scripts/run-browser-test.sh tests/wasm 4510 tests/wasm_browser_test.js
+  '';
 
-    sleep 3
+  tasks."test:demo".exec = ''
+    set -euo pipefail
 
-    node tests/wasm_browser_test.js
+    echo "Building UI demo with wasm-pack..."
+    devenv tasks run build:transport-worker
+
+    npm install --silent >/dev/null
+    bash scripts/run-browser-test.sh web 8001 tests/demo_browser_test.js
   '';
 
   # Git hooks for code quality enforcement

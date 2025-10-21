@@ -8,4 +8,6 @@ pub trait FabricHandle: Send {
     fn wait_for_ready_drain(&self);
     fn try_push_event(&mut self, frame_id: u32, slot_idx: u32) -> bool;
     fn wait_for_event_space(&self);
+    /// Provide a mutable view of a frame slot to the closure.
+    fn with_frame_slot_mut<R>(&mut self, slot_idx: u32, f: impl FnOnce(&mut [u8]) -> R) -> R;
 }

@@ -23,3 +23,10 @@ pub use transport_worker::{EndpointLayout, FabricLayout, PortLayout, PortRole};
 // Test orchestration - GBX-specific integration tests
 #[cfg(target_arch = "wasm32")]
 pub mod tests;
+
+// GBX UI exports
+#[cfg(target_arch = "wasm32")]
+mod ui;
+
+#[cfg(target_arch = "wasm32")]
+pub use ui::{gbx_consume_frame, gbx_init, gbx_tick};

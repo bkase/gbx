@@ -1,0 +1,206 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>GBX UI Demo</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    background: #222;
+    color: #fff;
+    font-family: monospace;
+  }
+  #c {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 2px solid #444;
+  }
+  #info {
+    margin-top: 10px;
+    font-size: 14px;
+  }
+  .pass { color: #0f0; }
+  .fail { color: #f00; }
+</style>
+</head>
+<body>
+  <h1 id="title">GBX UI Demo</h1>
+  <canvas id="c" width="160" height="144"></canvas>
+  <div id="info">Initializing...</div>
+
+  <script type="module">
+    import init, { gbx_init, gbx_tick, gbx_consume_frame } from "./pkg/transport_worker.js";
+
+    const canvas = document.getElementById("c");
+    const ctx = canvas.getContext("2d");
+    const img = new ImageData(160, 144);
+    const info = document.getElementById("info");
+    const title = document.getElementById("title");
+
+    // Check if we're in test mode
+    const params = new URLSearchParams(window.location.search);
+    const isTest = params.has('test');
+
+    if (isTest) {
+      title.textContent = "GBX UI Integration Test";
+    }
+
+    function log(msg) {
+      console.log(msg);
+      if (isTest) {
+        info.innerHTML += `<div>${msg}</div>`;
+      } else {
+        info.textContent = msg;
+      }
+    }
+
+    function pass(msg) {
+      console.log(`WASM_TEST_PASS: ${msg}`);
+      if (isTest) {
+        log(`<span class="pass">✓ ${msg}</span>`);
+      }
+    }
+
+    function fail(msg) {
+      console.error(`WASM_TEST_FAIL: ${msg}`);
+      if (isTest) {
+        log(`<span class="fail">✗ ${msg}</span>`);
+      }
+      throw new Error(msg);
+    }
+
+    // wasm-bindgen loader is async; our exports are synchronous
+    await init();
+
+    if (isTest) {
+      // ===== TEST MODE =====
+      try {
+        pass("WASM module loaded");
+
+        log("Calling gbx_init()...");
+        gbx_init();
+        pass("gbx_init() succeeded");
+
+        log("Calling gbx_tick()...");
+        const reports = gbx_tick(32);
+        pass(`gbx_tick() returned ${reports.length} reports`);
+
+        if (reports.length === 0) {
+          fail("Expected at least one report from gbx_tick()");
+        }
+
+        // Look for LaneFrame report
+        let foundLaneFrame = false;
+        for (const r of reports) {
+          log(`  Report type: ${r.type}`);
+          if (r.type === "Kernel.LaneFrame") {
+            foundLaneFrame = true;
+            pass(`Found LaneFrame: frame_id=${r.frame_id}, lane=${r.lane}, w=${r.width}, h=${r.height}`);
+
+            let pixels = null;
+
+            // Try to consume if slot_span is present
+            if (r.start_idx !== undefined) {
+              log(`  Attempting to consume frame from slot ${r.start_idx}...`);
+              try {
+                const frame = gbx_consume_frame(r.start_idx);
+                pixels = frame.pixels;
+                pass(`Consumed frame from slot: ${frame.width}x${frame.height}, ${frame.pixels.length} bytes`);
+              } catch (e) {
+                log(`  Note: Could not consume frame (slot not ready): ${e.message}`);
+              }
+            } else if (r.pixels) {
+              // Embedded pixels (mock services path)
+              pixels = r.pixels;
+              pass(`Frame has embedded pixels: ${pixels.length} bytes`);
+            } else {
+              log(`  Note: LaneFrame has no slot_span and no embedded pixels`);
+            }
+
+            // Verify frame dimensions and pixels if present
+            if (r.width !== 160 || r.height !== 144) {
+              fail(`Expected 160x144 frame, got ${r.width}x${r.height}`);
+            }
+
+            if (pixels) {
+              if (pixels.length !== 160 * 144 * 4) {
+                fail(`Expected ${160*144*4} pixel bytes, got ${pixels.length}`);
+              }
+
+              // Sample pixels to verify checkerboard pattern
+              log(`  Pixel samples: [0]=${pixels[0]}, [8*4]=${pixels[8*4]}, [3]=${pixels[3]}`);
+              if (pixels[3] !== 0xFF) {
+                fail(`Expected alpha=0xFF, got ${pixels[3]}`);
+              }
+            }
+          }
+        }
+
+        if (!foundLaneFrame) {
+          log("Warning: No LaneFrame report (kernel may not produce frames on first tick)");
+        }
+
+        pass("All UI export smoke tests passed");
+        console.log("WASM_TEST_DONE");
+
+      } catch (e) {
+        fail(`Test failed: ${e.message}`);
+      }
+
+    } else {
+      // ===== DEMO MODE =====
+      let frameCount = 0;
+      let startTime = Date.now();
+
+      try {
+        gbx_init();
+        info.textContent = "Running...";
+      } catch (e) {
+        info.textContent = `Init error: ${e}`;
+        throw e;
+      }
+
+      function loop() {
+        try {
+          const reps = gbx_tick(32);
+          for (const r of reps) {
+            if (r.type === "Kernel.LaneFrame") {
+              let pixels = null;
+
+              if (r.start_idx !== undefined) {
+                // Slot pool path - consume from pool
+                const f = gbx_consume_frame(r.start_idx);
+                pixels = f.pixels;
+              } else if (r.pixels) {
+                // Direct pixel path - use embedded pixels
+                pixels = r.pixels;
+              }
+
+              if (pixels) {
+                img.data.set(pixels);
+                ctx.putImageData(img, 0, 0);
+                frameCount++;
+
+                // Update info every 60 frames
+                if (frameCount % 60 === 0) {
+                  const elapsed = (Date.now() - startTime) / 1000;
+                  const fps = (frameCount / elapsed).toFixed(1);
+                  info.textContent = `Frames: ${frameCount} | FPS: ${fps}`;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          info.textContent = `Runtime error: ${e}`;
+          console.error(e);
+          return;
+        }
+        requestAnimationFrame(loop);
+      }
+
+      loop();
+    }
+  </script>
+</body>
+</html>

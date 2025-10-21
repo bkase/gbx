@@ -4,7 +4,10 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "wasm:test": "node tests/wasm_browser_test.js"
+    "wasm:test": "node tests/wasm_browser_test.js",
+    "serve": "node server.js web",
+    "serve:web": "node server.js web",
+    "serve:test": "node server.js tests/wasm 4510"
   },
   "devDependencies": {
     "selenium-webdriver": "^4.17.0"

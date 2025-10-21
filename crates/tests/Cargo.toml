@@ -19,6 +19,7 @@ transport-fabric = { path = "../transport-fabric" }
 transport-scenarios = { path = "../transport-scenarios" }
 parking_lot = { workspace = true }
 services-transport = { path = "../services/services-transport" }
+gbx-frame = { path = "../gbx-frame" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

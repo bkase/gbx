@@ -6,6 +6,9 @@ mod native_e2e;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod schema_golden;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod frame_sanity;
+
 #[cfg(test)]
 mod tests {
     use app::Scheduler;

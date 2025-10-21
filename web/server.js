@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Legacy wrapper - delegates to unified server.js
+// Wrapper - delegates to unified server.js
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { spawn } from 'child_process';
@@ -7,9 +7,9 @@ import { spawn } from 'child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const port = process.env.WASM_TEST_PORT || 4510;
+const port = process.env.GBX_PORT || 8000;
 const serverPath = path.resolve(__dirname, '..', 'server.js');
-const rootDir = path.resolve(__dirname, 'wasm');
+const rootDir = __dirname;
 
 const proc = spawn('node', [serverPath, rootDir, port], {
   stdio: 'inherit',

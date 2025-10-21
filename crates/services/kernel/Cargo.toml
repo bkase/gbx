@@ -7,3 +7,4 @@ edition = "2021"
 hub = { path = "../../hub" }
 parking_lot = { workspace = true }
 smallvec = { workspace = true }
+gbx-frame = { path = "../../gbx-frame" }

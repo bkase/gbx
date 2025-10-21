@@ -1,0 +1,7 @@
+[package]
+name = "gbx-frame"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# No dependencies - this is a pure utility crate working with &mut [u8]
