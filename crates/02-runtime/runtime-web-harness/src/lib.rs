@@ -18,10 +18,9 @@ pub use fabric_worker_wasm::types::{ScenarioStats, TestConfig};
 use futures::channel::oneshot;
 use gloo_timers::future::TimeoutFuture;
 use js_sys::{Object, Reflect};
-use parking_lot::Mutex;
 use rkyv::rancor::Error;
 use services_fabric::TransportServices;
-use transport::{Envelope, MsgRing, Record, SlotPool, SlotPop};
+use transport::{Envelope, MsgRing, Record, SlotPoolHandle, SlotPop};
 use transport_codecs::KernelCodec;
 use transport_fabric::{EndpointHandle, PortLayout, PortRole};
 use transport_scenarios::{
@@ -52,8 +51,8 @@ pub struct TransportHarness {
     _services: TransportServices,
     kernel_endpoint: EndpointHandle<KernelCodec>,
     event_ring: MsgRing,
-    frame_pool: Arc<Mutex<SlotPool>>,
-    audio_pool: Arc<Mutex<SlotPool>>,
+    frame_pool: Arc<SlotPoolHandle>,
+    audio_pool: Arc<SlotPoolHandle>,
     /// Number of frame slots.
     pub frame_slot_count: usize,
     #[allow(dead_code)]
@@ -79,14 +78,8 @@ impl TransportHarness {
             .cloned()
             .ok_or_else(|| JsValue::from_str("missing audio slot pool"))?;
 
-        let frame_slot_count = {
-            let guard = frame_pool.lock();
-            guard.slot_count() as usize
-        };
-        let audio_slot_count = {
-            let guard = audio_pool.lock();
-            guard.slot_count() as usize
-        };
+        let frame_slot_count = frame_pool.with_ref(|pool| pool.slot_count() as usize);
+        let audio_slot_count = audio_pool.with_ref(|pool| pool.slot_count() as usize);
 
         let layout_bytes = rkyv::to_bytes::<Error>(&services.worker.layout)
             .map_err(|err| JsValue::from_str(&format!("serialize layout failed: {err}")))?
@@ -170,20 +163,16 @@ impl TransportHarness {
         let mut max_ready_depth = 0usize;
 
         while frames.len() < target {
-            {
-                let mut frame_pool = self.frame_pool.lock();
-                while let SlotPop::Ok { slot_idx } = frame_pool.pop_ready() {
-                    let frame_id = read_frame_slot(&mut *frame_pool, slot_idx);
+            self.frame_pool.with_mut(|pool| {
+                while let SlotPop::Ok { slot_idx } = pool.pop_ready() {
+                    let frame_id = read_frame_slot(pool, slot_idx);
                     frames.push(frame_id);
-                    frame_pool.release_free(slot_idx);
+                    pool.release_free(slot_idx);
                 }
 
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let in_use = frame_pool.slot_count() as usize - frame_pool.free_len() as usize;
-                    max_ready_depth = max_ready_depth.max(in_use);
-                }
-            }
+                let in_use = pool.slot_count() as usize - pool.free_len() as usize;
+                max_ready_depth = max_ready_depth.max(in_use);
+            });
 
             let mut drained = 0usize;
             while drained < budget {
@@ -199,14 +188,13 @@ impl TransportHarness {
             TimeoutFuture::new(0).await;
         }
 
-        {
-            let mut frame_pool = self.frame_pool.lock();
-            while let SlotPop::Ok { slot_idx } = frame_pool.pop_ready() {
-                let frame_id = read_frame_slot(&mut *frame_pool, slot_idx);
+        self.frame_pool.with_mut(|pool| {
+            while let SlotPop::Ok { slot_idx } = pool.pop_ready() {
+                let frame_id = read_frame_slot(pool, slot_idx);
                 frames.push(frame_id);
-                frame_pool.release_free(slot_idx);
+                pool.release_free(slot_idx);
             }
-        }
+        });
 
         while let Some(record) = self.event_ring.consumer_peek() {
             events.push(parse_event_record(&record));
@@ -223,8 +211,7 @@ impl TransportHarness {
     /// Ensures all rings reconcile at the end of the test.
     #[cfg(target_arch = "wasm32")]
     pub fn assert_reconciliation(&self) -> Result<(), JsValue> {
-        {
-            let pool = self.frame_pool.lock();
+        self.frame_pool.with_ref(|pool| {
             ensure!(
                 pool.free_len() == pool.slot_count(),
                 "all frame slots should be free (free={}, total={})",
@@ -232,9 +219,8 @@ impl TransportHarness {
                 pool.slot_count()
             );
             ensure!(pool.ready_len() == 0, "ready ring drained");
-        }
-        {
-            let pool = self.audio_pool.lock();
+        });
+        self.audio_pool.with_ref(|pool| {
             ensure!(
                 pool.free_len() == pool.slot_count(),
                 "audio slots remain unused and free (free={}, total={})",
@@ -245,7 +231,7 @@ impl TransportHarness {
                 pool.ready_len() == 0,
                 "audio ready ring should remain empty"
             );
-        }
+        });
         ensure!(
             self.event_ring.consumer_peek().is_none(),
             "event ring should be empty after drain"

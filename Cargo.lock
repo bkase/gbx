@@ -395,6 +395,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-core"
+version = "0.1.0"
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -897,10 +901,11 @@ dependencies = [
 name = "services-kernel"
 version = "0.1.0"
 dependencies = [
- "gbx-frame",
  "hub",
+ "kernel-core",
  "services-common",
  "smallvec",
+ "transport",
 ]
 
 [[package]]

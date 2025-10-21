@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 hub = { path = "../../05-app-loop/hub" }
-smallvec = { workspace = true }
-gbx-frame = { path = "../../05-app-loop/gbx-frame" }
+kernel-core = { path = "../kernel-core" }
 services-common = { path = "../../03-driver/services-common" }
+smallvec = { workspace = true }
+transport = { path = "../../01-transport/transport" }

@@ -256,6 +256,44 @@ pub struct SlotPool {
     slot_count: u32,
 }
 
+use std::cell::UnsafeCell;
+
+/// Single-threaded handle for interacting with a [`SlotPool`] without external locking.
+///
+/// The transport fabric operates under the assumption that slot pools are only accessed from a
+/// single thread at a time. This wrapper provides interior mutability while keeping the
+/// underlying non-thread-safe primitives out of the public API.
+pub struct SlotPoolHandle {
+    pool: UnsafeCell<SlotPool>,
+}
+
+// SAFETY: The transport design guarantees single-threaded access per handle. The interior uses
+// atomics for ring coordination; marking the handle as `Send`/`Sync` allows it to be moved between
+// threads while callers uphold the single-threaded access contract.
+unsafe impl Send for SlotPoolHandle {}
+unsafe impl Sync for SlotPoolHandle {}
+
+impl SlotPoolHandle {
+    /// Wraps a slot pool in a handle.
+    pub fn new(pool: SlotPool) -> Self {
+        Self {
+            pool: UnsafeCell::new(pool),
+        }
+    }
+
+    /// Grants immutable access to the slot pool.
+    pub fn with_ref<R>(&self, f: impl FnOnce(&SlotPool) -> R) -> R {
+        // SAFETY: Callers respect single-threaded access, so obtaining a shared reference is sound.
+        unsafe { f(&*self.pool.get()) }
+    }
+
+    /// Grants mutable access to the slot pool.
+    pub fn with_mut<R>(&self, f: impl FnOnce(&mut SlotPool) -> R) -> R {
+        // SAFETY: Single-threaded access ensures exclusive use while this call executes.
+        unsafe { f(&mut *self.pool.get()) }
+    }
+}
+
 impl SlotPool {
     /// Allocates a new slot pool using the provided configuration.
     ///
