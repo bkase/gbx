@@ -1,0 +1,43 @@
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+app = { path = "../../05-app-loop/app" }
+hub = { path = "../../05-app-loop/hub" }
+mock = { path = "../../06-apps/mock" }
+world = { path = "../../05-app-loop/world" }
+bytecheck = "0.8"
+rkyv = { version = "0.8", features = ["bytecheck"] }
+transport = { path = "../../01-transport/transport" }
+transport-fabric = { path = "../../01-transport/transport-fabric" }
+transport-scenarios = { path = "../../01-transport/transport-scenarios" }
+parking_lot = { workspace = true }
+services-fabric = { path = "../../03-driver/services-fabric" }
+gbx-frame = { path = "../../05-app-loop/gbx-frame" }
+runtime-native = { path = "../../02-runtime/runtime-native" }
+testdata = { path = "../../testdata" }
+futures = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+fabric-worker-wasm = { path = "../../02-runtime/fabric-worker-wasm" }
+runtime-web-harness = { path = "../../02-runtime/runtime-web-harness" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+gloo-timers = { version = "0.2", features = ["futures"] }
+web-sys = { version = "0.3", features = [
+  "Blob",
+  "BlobPropertyBag",
+  "DedicatedWorkerGlobalScope",
+  "MessageEvent",
+  "Worker",
+  "WorkerOptions",
+  "WorkerType",
+  "Url",
+  "console",
+] }

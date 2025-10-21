@@ -186,16 +186,16 @@ in {
     export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
     cargo build --target wasm32-unknown-unknown -p app
   '';
-  tasks."build:transport-worker".exec = ''
+  tasks."build:fabric-worker-wasm".exec = ''
     set -euo pipefail
 
-    echo "Building transport-worker with wasm-pack..."
+    echo "Building fabric-worker-wasm with wasm-pack..."
     export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
-    wasm-pack build --target web crates/gbx-wasm --out-dir ../../web/pkg --out-name transport_worker -- -Z build-std=std,panic_abort
+    wasm-pack build --target web crates/06-apps/gbx-wasm --out-dir ../../../web/pkg --out-name fabric_worker_wasm -- -Z build-std=std,panic_abort
 
     echo "Verifying memory is imported..."
-    wasm-tools print web/pkg/transport_worker_bg.wasm | grep -E "(import.*memory)" | head -1
-    echo "✅ Memory import successful! transport-worker ready for shared memory."
+    wasm-tools print web/pkg/fabric_worker_wasm_bg.wasm | grep -E "(import.*memory)" | head -1
+    echo "✅ Memory import successful! fabric-worker-wasm ready for shared memory."
   '';
   tasks."test:workspace".exec = ''
     devenv tasks run assets:testroms
@@ -223,16 +223,16 @@ in {
   tasks."test:wasm-smoke".exec = ''
     set -euo pipefail
 
-    echo "Building transport-worker with wasm-pack..."
-    devenv tasks run build:transport-worker
+    echo "Building fabric-worker-wasm with wasm-pack..."
+    devenv tasks run build:fabric-worker-wasm
 
     echo "Copying artifacts to tests/wasm/pkg..."
     rm -rf tests/wasm/pkg
     mkdir -p tests/wasm/pkg
-    cp web/pkg/transport_worker.js tests/wasm/pkg/
-    cp web/pkg/transport_worker_bg.wasm tests/wasm/pkg/
-    cp web/pkg/transport_worker_bg.wasm.d.ts tests/wasm/pkg/ 2>/dev/null || true
-    cp web/pkg/transport_worker.d.ts tests/wasm/pkg/ 2>/dev/null || true
+    cp web/pkg/fabric_worker_wasm.js tests/wasm/pkg/
+    cp web/pkg/fabric_worker_wasm_bg.wasm tests/wasm/pkg/
+    cp web/pkg/fabric_worker_wasm_bg.wasm.d.ts tests/wasm/pkg/ 2>/dev/null || true
+    cp web/pkg/fabric_worker_wasm.d.ts tests/wasm/pkg/ 2>/dev/null || true
     cp web/worker.js tests/wasm/pkg/
 
     npm install --silent >/dev/null
@@ -248,7 +248,7 @@ in {
     set -euo pipefail
 
     echo "Building UI demo with wasm-pack..."
-    devenv tasks run build:transport-worker
+    devenv tasks run build:fabric-worker-wasm
 
     npm install --silent >/dev/null
     bash scripts/run-browser-test.sh web 8001 tests/demo_browser_test.js

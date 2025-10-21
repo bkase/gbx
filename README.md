@@ -68,7 +68,7 @@ web/               # WASM host artifacts (future UI runtime)
 **Generalization**: To use `transport-worker` in your own project:
 1. Create your own top-level WASM crate (like `gbx-wasm`)
 2. Add `transport-worker` as a dependency
-3. Re-export its worker functions: `pub use transport_worker::{worker_init, worker_flood, ...};`
+3. Re-export its worker functions: `pub use fabric_worker_wasm::{worker_init, worker_flood, ...};`
 4. Add your own `#[wasm_bindgen]` entry points for your app-specific functionality
 
 ## Development Workflow

@@ -1,0 +1,10 @@
+[package]
+name = "runtime-native"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parking_lot = { workspace = true }
+transport = { path = "../../01-transport/transport" }
+transport-fabric = { path = "../../01-transport/transport-fabric" }
+transport-scenarios = { path = "../../01-transport/transport-scenarios" }

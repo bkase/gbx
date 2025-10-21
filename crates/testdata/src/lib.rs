@@ -101,9 +101,8 @@ fn load_entry(idx: usize) -> Arc<[u8]> {
 
             let meta = &generated::ROMS[idx];
             let file_path = DATA_DIR.join(meta.path);
-            let bytes = std::fs::read(&file_path).unwrap_or_else(|err| {
-                panic!("failed to read ROM {path:?}: {err}", path = file_path)
-            });
+            let bytes = std::fs::read(&file_path)
+                .unwrap_or_else(|err| panic!("failed to read ROM {file_path:?}: {err}"));
 
             let digest = Sha256::digest(&bytes);
             let digest_hex = hex::encode(digest);
