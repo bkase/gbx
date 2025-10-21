@@ -36,3 +36,4 @@ web-sys = { version = "0.3", features = [
   "Url",
   "console",
 ] }
+testdata = { path = "../testdata" }

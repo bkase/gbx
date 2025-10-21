@@ -16,11 +16,10 @@ mod tests {
     use mock::{make_hub, make_hub_with_capacities};
     use services_transport::TransportServices;
     use std::sync::Arc;
+    use testdata::{bytes as rom_bytes, metadata};
     use world::World;
 
-    fn arc_bytes(len: usize) -> Arc<[u8]> {
-        Arc::from(vec![0u8; len])
-    }
+    const TEST_ROM_PATH: &str = "mooneye-test-suite/acceptance/ei_sequence.gb";
 
     #[test]
     fn load_rom_and_pump_frame_produces_gpu_work() {
@@ -29,7 +28,7 @@ mod tests {
         let mut scheduler = Scheduler::new(world, hub);
         scheduler.world_mut().set_auto_pump(false);
 
-        let rom_bytes = arc_bytes(4);
+        let rom_bytes = rom_bytes(TEST_ROM_PATH);
         scheduler.enqueue_intent(
             IntentPriority::P0,
             Intent::LoadRom {
@@ -55,7 +54,7 @@ mod tests {
         let mut scheduler = Scheduler::new(world, hub);
         scheduler.world_mut().set_auto_pump(false);
 
-        let rom_bytes = arc_bytes(2);
+        let rom_bytes = rom_bytes(TEST_ROM_PATH);
         let rom_bytes_b = Arc::clone(&rom_bytes);
 
         scheduler.enqueue_intent(
@@ -95,7 +94,7 @@ mod tests {
         scheduler.world_mut().set_auto_pump(false);
 
         // Load a ROM first
-        let rom_bytes = arc_bytes(4);
+        let rom_bytes = rom_bytes(TEST_ROM_PATH);
         scheduler.enqueue_intent(
             IntentPriority::P0,
             Intent::LoadRom {
@@ -121,5 +120,12 @@ mod tests {
         let services = TransportServices::new().expect("build transport services");
         let _worker = services.worker;
         let _hub = services.hub;
+    }
+
+    #[test]
+    fn testdata_metadata_matches_bytes() {
+        let meta = metadata(TEST_ROM_PATH).expect("metadata exists");
+        let payload = rom_bytes(TEST_ROM_PATH);
+        assert_eq!(payload.len() as u64, meta.size);
     }
 }

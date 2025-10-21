@@ -12,6 +12,8 @@ let
     python3
     rustup
     nodejs
+    curl
+    unzip
   ];
 
 in {
@@ -140,11 +142,43 @@ in {
   '';
 
   # Define tasks first so hooks can reference them
+  tasks."assets:testroms".exec = ''
+    set -euo pipefail
+
+    dest="third_party/testroms/c-sp-v7.0"
+    if [ -d "$dest/mooneye-test-suite" ]; then
+      exit 0
+    fi
+
+    mkdir -p third_party/testroms
+
+    tmp="$(mktemp)"
+    curl -L -o "$tmp" "https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip"
+
+    echo "b9a9d7a1075aa35a3d07c07c34974048672d8520dca9e07a50178f5860c3832c  $tmp" | shasum -a 256 -c -
+
+    staging="$(mktemp -d)"
+    unzip -q "$tmp" -d "$staging"
+    rm "$tmp"
+
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    find "$staging" -mindepth 1 -maxdepth 1 -print0 | while IFS= read -r -d "" entry; do
+      name="$(basename "$entry")"
+      mv "$entry" "$dest/$name"
+    done
+    rm -rf "$staging"
+  '';
+
   tasks."format:workspace".exec = "cargo fmt --all";
   tasks."format:check".exec = "cargo fmt --all -- --check";
   tasks."lint:workspace".exec =
-    "cargo clippy --all-targets --all-features -- -D warnings -D clippy::undocumented_unsafe_blocks";
+    ''
+      devenv tasks run assets:testroms
+      cargo clippy --all-targets --all-features -- -D warnings -D clippy::undocumented_unsafe_blocks
+    '';
   tasks."build:workspace".exec = ''
+    devenv tasks run assets:testroms
     export RUSTFLAGS="$NATIVE_RUSTFLAGS"
     cargo build --all-targets
   '';
@@ -164,21 +198,25 @@ in {
     echo "✅ Memory import successful! transport-worker ready for shared memory."
   '';
   tasks."test:workspace".exec = ''
+    devenv tasks run assets:testroms
     export RUSTFLAGS="$NATIVE_RUSTFLAGS"
     cargo test --all-targets
     cargo test -p transport-fabric --features proptest --test mailbox_tests
   '';
   tasks."test:golden".exec = ''
+    devenv tasks run assets:testroms
     export RUSTFLAGS="$NATIVE_RUSTFLAGS"
     cargo test -p tests transport_schema_goldens_v1
   '';
 
   # Tight test discipline tasks (stable API for CI)
   tasks."test:fast".exec = ''
+    devenv tasks run assets:testroms
     export RUSTFLAGS="$NATIVE_RUSTFLAGS"
     cargo nextest run --profile fast
   '';
   tasks."test:slow".exec = ''
+    devenv tasks run assets:testroms
     export RUSTFLAGS="$NATIVE_RUSTFLAGS"
     cargo nextest run --profile slow --run-ignored ignored-only --features loom
   '';
