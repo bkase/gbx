@@ -1,0 +1,30 @@
+[package]
+name = "runtime-web-harness"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+futures = { workspace = true }
+gloo-timers = { version = "0.2", features = ["futures"] }
+js-sys = "0.3.81"
+parking_lot = { workspace = true }
+rkyv = { version = "0.8", features = ["bytecheck"] }
+services-fabric = { path = "../../03-driver/services-fabric" }
+transport = { path = "../../01-transport/transport" }
+transport-codecs = { path = "../../01-transport/transport-codecs" }
+transport-fabric = { path = "../../01-transport/transport-fabric" }
+transport-scenarios = { path = "../../01-transport/transport-scenarios" }
+fabric-worker-wasm = { path = "../fabric-worker-wasm" }
+wasm-bindgen = "0.2.104"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3.81", features = [
+  "Blob",
+  "BlobPropertyBag",
+  "DedicatedWorkerGlobalScope",
+  "MessageEvent",
+  "Worker",
+  "WorkerOptions",
+  "WorkerType",
+  "Url",
+  "console",
+] }

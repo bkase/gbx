@@ -1,0 +1,10 @@
+[package]
+name = "transport-scenarios"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hub = { path = "../../05-app-loop/hub" }
+transport = { path = "../transport" }
+transport-fabric = { path = "../transport-fabric" }
+parking_lot = { workspace = true }

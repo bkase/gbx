@@ -103,8 +103,7 @@ fn main() -> Result<()> {
 
     if !bundle_dir.exists() {
         return Err(anyhow!(
-            "vendor directory {:?} missing; run `devenv tasks run assets:testroms`",
-            bundle_dir
+            "vendor directory {bundle_dir:?} missing; run `devenv tasks run assets:testroms`"
         ));
     }
 
@@ -139,8 +138,8 @@ fn main() -> Result<()> {
 
     for rom in &manifest.roms {
         let source_file = bundle_dir.join(&rom.path);
-        let rom_bytes = fs::read(&source_file)
-            .with_context(|| format!("reading ROM file {:?}", source_file))?;
+        let rom_bytes =
+            fs::read(&source_file).with_context(|| format!("reading ROM file {source_file:?}"))?;
         let sha = hex::encode(Sha256::digest(&rom_bytes));
         let size = rom_bytes.len() as u64;
 
@@ -148,7 +147,7 @@ fn main() -> Result<()> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&dest, &rom_bytes).with_context(|| format!("copying ROM bytes to {:?}", dest))?;
+        fs::write(&dest, &rom_bytes).with_context(|| format!("copying ROM bytes to {dest:?}"))?;
 
         writeln!(
             &mut generated,
@@ -169,7 +168,7 @@ fn main() -> Result<()> {
                 .join(&rom.path);
             let embed_rel = embed_source.to_string_lossy().replace('\\', "/");
             embed_lines.push(format!(
-                "    ({}, include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{embed_rel}\"))),\n",
+                "    ({}, include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{embed_rel}\")).as_slice()),\n",
                 rust_string(&rom.path)
             ));
         }
@@ -177,7 +176,7 @@ fn main() -> Result<()> {
 
     generated.push_str("];\n\n");
     generated.push_str("#[cfg(feature = \"embed\")]\n");
-    generated.push_str("pub(crate) static EMBED_DATA: &[(&'static str, &'static [u8])] = [\n");
+    generated.push_str("pub(crate) static EMBED_DATA: &[(&str, &[u8])] = &[\n");
     for line in embed_lines {
         generated.push_str(&line);
     }

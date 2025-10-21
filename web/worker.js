@@ -3,7 +3,7 @@ import init, {
   fabric_worker_run,
   worker_register_services,
   worker_register_test
-} from './transport_worker.js';
+} from './fabric_worker_wasm.js';
 
 const Op = {
   Init: 0,

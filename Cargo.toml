@@ -1,23 +1,41 @@
 [workspace]
 members = [
-  "crates/world",
-  "crates/hub",
-  "crates/services/kernel",
-  "crates/services/gpu",
-  "crates/services/audio",
-  "crates/services/fs",
-  "crates/transport",
-  "crates/app",
-  "crates/mock",
-  "crates/tests",
+  # 01 – Transport
+  "crates/01-transport/transport",
+  "crates/01-transport/transport-fabric",
+  "crates/01-transport/transport-codecs",
+  "crates/01-transport/transport-scenarios",
+
+  # 02 – Runtime
+  "crates/02-runtime/fabric-worker-wasm",
+  "crates/02-runtime/runtime-native",
+  "crates/02-runtime/runtime-web-harness",
+
+  # 03 – Driver
+  "crates/03-driver/services-fabric",
+  "crates/03-driver/services-common",
+
+  # 04 – Services
+  "crates/04-services/kernel",
+  "crates/04-services/gpu",
+  "crates/04-services/audio",
+  "crates/04-services/fs",
+
+  # 05 – App loop
+  "crates/05-app-loop/world",
+  "crates/05-app-loop/hub",
+  "crates/05-app-loop/app",
+  "crates/05-app-loop/gbx-frame",
+
+  # 06 – Apps
+  "crates/06-apps/gbx-wasm",
+  "crates/06-apps/mock",
+
+  # 99 – Tests
+  "crates/99-tests/tests",
+
+  # Shared fixtures
   "crates/testdata",
-  "crates/transport-worker",
-  "crates/transport-fabric",
-  "crates/transport-codecs",
-  "crates/transport-scenarios",
-  "crates/services/services-transport",
-  "crates/gbx-wasm",
-  "crates/gbx-frame",
 ]
 resolver = "2"
 

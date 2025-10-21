@@ -1,0 +1,9 @@
+[package]
+name = "services-audio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hub = { path = "../../05-app-loop/hub" }
+smallvec = { workspace = true }
+services-common = { path = "../../03-driver/services-common" }

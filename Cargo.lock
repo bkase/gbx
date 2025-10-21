@@ -144,6 +144,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "fabric-worker-wasm"
+version = "0.1.0"
+dependencies = [
+ "hub",
+ "js-sys",
+ "parking_lot",
+ "rkyv",
+ "services-audio",
+ "services-fs",
+ "services-gpu",
+ "services-kernel",
+ "transport",
+ "transport-codecs",
+ "transport-fabric",
+ "transport-scenarios",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -248,6 +268,7 @@ version = "0.1.0"
 dependencies = [
  "app",
  "bytecheck",
+ "fabric-worker-wasm",
  "futures",
  "gbx-frame",
  "gloo-timers",
@@ -256,12 +277,12 @@ dependencies = [
  "mock",
  "parking_lot",
  "rkyv",
- "services-transport",
+ "runtime-web-harness",
+ "services-fabric",
  "transport",
  "transport-codecs",
  "transport-fabric",
  "transport-scenarios",
- "transport-worker",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -740,6 +761,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime-native"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "transport",
+ "transport-fabric",
+ "transport-scenarios",
+]
+
+[[package]]
+name = "runtime-web-harness"
+version = "0.1.0"
+dependencies = [
+ "fabric-worker-wasm",
+ "futures",
+ "gloo-timers",
+ "js-sys",
+ "parking_lot",
+ "rkyv",
+ "services-fabric",
+ "transport",
+ "transport-codecs",
+ "transport-fabric",
+ "transport-scenarios",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -801,8 +852,27 @@ name = "services-audio"
 version = "0.1.0"
 dependencies = [
  "hub",
- "parking_lot",
+ "services-common",
  "smallvec",
+]
+
+[[package]]
+name = "services-common"
+version = "0.1.0"
+dependencies = [
+ "hub",
+ "smallvec",
+]
+
+[[package]]
+name = "services-fabric"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hub",
+ "transport",
+ "transport-codecs",
+ "transport-fabric",
 ]
 
 [[package]]
@@ -810,7 +880,7 @@ name = "services-fs"
 version = "0.1.0"
 dependencies = [
  "hub",
- "parking_lot",
+ "services-common",
  "smallvec",
 ]
 
@@ -819,7 +889,7 @@ name = "services-gpu"
 version = "0.1.0"
 dependencies = [
  "hub",
- "parking_lot",
+ "services-common",
  "smallvec",
 ]
 
@@ -829,19 +899,8 @@ version = "0.1.0"
 dependencies = [
  "gbx-frame",
  "hub",
- "parking_lot",
+ "services-common",
  "smallvec",
-]
-
-[[package]]
-name = "services-transport"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hub",
- "transport",
- "transport-codecs",
- "transport-fabric",
 ]
 
 [[package]]
@@ -917,6 +976,7 @@ version = "0.1.0"
 dependencies = [
  "app",
  "bytecheck",
+ "fabric-worker-wasm",
  "futures",
  "gbx-frame",
  "gloo-timers",
@@ -925,12 +985,13 @@ dependencies = [
  "mock",
  "parking_lot",
  "rkyv",
- "services-transport",
+ "runtime-native",
+ "runtime-web-harness",
+ "services-fabric",
  "testdata",
  "transport",
  "transport-fabric",
  "transport-scenarios",
- "transport-worker",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1129,26 +1190,6 @@ dependencies = [
  "parking_lot",
  "transport",
  "transport-fabric",
-]
-
-[[package]]
-name = "transport-worker"
-version = "0.1.0"
-dependencies = [
- "hub",
- "js-sys",
- "parking_lot",
- "rkyv",
- "services-audio",
- "services-fs",
- "services-gpu",
- "services-kernel",
- "transport",
- "transport-codecs",
- "transport-fabric",
- "transport-scenarios",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
