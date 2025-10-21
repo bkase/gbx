@@ -1,8 +1,7 @@
 use hub::{Service, SubmitOutcome, SubmitPolicy};
-use parking_lot::Mutex;
 use smallvec::SmallVec;
 use std::sync::Arc;
-use transport::SlotPool;
+use transport::SlotPoolHandle;
 
 use crate::codec::Codec;
 use crate::error::{FabricError, FabricResult};
@@ -15,7 +14,7 @@ pub struct EndpointHandle<C: Codec> {
     pub(crate) besteffort: Option<ProducerPort>,
     pub(crate) coalesce: Option<ProducerPort>,
     pub(crate) replies: ConsumerPort,
-    pub(crate) slot_pools: Vec<Arc<Mutex<SlotPool>>>,
+    pub(crate) slot_pools: Vec<Arc<SlotPoolHandle>>,
     pub(crate) codec: C,
 }
 
@@ -48,7 +47,7 @@ impl<C: Codec> EndpointHandle<C> {
     }
 
     /// Returns a slice of all configured slot pools.
-    pub fn slot_pools(&self) -> &[Arc<Mutex<SlotPool>>] {
+    pub fn slot_pools(&self) -> &[Arc<SlotPoolHandle>] {
         &self.slot_pools
     }
 
@@ -70,7 +69,7 @@ pub struct WorkerEndpoint<C: Codec> {
     pub(crate) besteffort: Option<ConsumerPort>,
     pub(crate) coalesce: Option<ConsumerPort>,
     pub(crate) replies: ProducerPort,
-    pub(crate) slot_pools: Vec<Arc<Mutex<SlotPool>>>,
+    pub(crate) slot_pools: Vec<Arc<SlotPoolHandle>>,
     pub(crate) codec: C,
 }
 
@@ -80,7 +79,7 @@ impl<C: Codec> WorkerEndpoint<C> {
         besteffort: Option<ConsumerPort>,
         coalesce: Option<ConsumerPort>,
         replies: ProducerPort,
-        slot_pools: Vec<Arc<Mutex<SlotPool>>>,
+        slot_pools: Vec<Arc<SlotPoolHandle>>,
         codec: C,
     ) -> Self {
         Self {
@@ -120,7 +119,7 @@ impl<C: Codec> WorkerEndpoint<C> {
     }
 
     /// Returns a slice of all configured slot pools.
-    pub fn slot_pools(&self) -> &[Arc<Mutex<SlotPool>>] {
+    pub fn slot_pools(&self) -> &[Arc<SlotPoolHandle>] {
         &self.slot_pools
     }
 

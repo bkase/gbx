@@ -21,7 +21,6 @@ pub mod types {
 mod wasm {
     use super::types::{self, *};
     use hub::{Service as HubService, SubmitOutcome, SubmitPolicy};
-    use parking_lot::Mutex;
     use services_audio::AudioService;
     use services_fs::FsService;
     use services_gpu::GpuService;
@@ -33,7 +32,7 @@ mod wasm {
         TAG_GPU_REP, TAG_KERNEL_CMD, TAG_KERNEL_REP,
     };
     use transport::wasm::IntoNativeLayout;
-    use transport::{Envelope, Mailbox, MsgRing, SlotPool, SlotPush};
+    use transport::{Envelope, Mailbox, MsgRing, SlotPool, SlotPoolHandle, SlotPush};
     use transport_codecs::{AudioCodec, FsCodec, GpuCodec, KernelCodec};
     use transport_fabric::{
         make_port_pair_mailbox, make_port_pair_ring, ArchivedFabricLayout, Codec, ServiceEngine,
@@ -261,7 +260,7 @@ mod wasm {
                 .iter()
                 .map(|pool_layout| {
                     let pool = SlotPool::from_wasm_layout(*pool_layout);
-                    Arc::new(Mutex::new(pool))
+                    Arc::new(SlotPoolHandle::new(pool))
                 })
                 .collect();
 

@@ -8,8 +8,8 @@ pub use world::reduce_intent::IntentReducer;
 pub use world::reduce_report::ReportReducer;
 pub use world::{
     AudioCmd, AudioRep, AudioSpan, AvCmd, FollowUps, FrameSpan, FsCmd, FsRep, GpuCmd, GpuRep,
-    Intent, IntentPriority, KernelCmd, KernelRep, Report, SubmitOutcome, SubmitPolicy, TickPurpose,
-    WorkCmd,
+    Intent, IntentPriority, KernelCmd, KernelRep, Report, SlotSpan, SubmitOutcome, SubmitPolicy,
+    TickPurpose, WorkCmd,
 };
 
 /// Default budget for processing intents per scheduler tick.

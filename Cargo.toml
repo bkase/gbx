@@ -16,6 +16,7 @@ members = [
   "crates/03-driver/services-common",
 
   # 04 – Services
+  "crates/04-services/kernel-core",
   "crates/04-services/kernel",
   "crates/04-services/gpu",
   "crates/04-services/audio",

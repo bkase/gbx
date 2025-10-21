@@ -1,7 +1,6 @@
 use hub::SubmitPolicy;
-use parking_lot::Mutex;
 use std::sync::Arc;
-use transport::{Envelope, Mailbox, MsgRing, SlotPool, SlotPoolConfig};
+use transport::{Envelope, Mailbox, MsgRing, SlotPool, SlotPoolConfig, SlotPoolHandle};
 
 use crate::codec::Codec;
 use crate::endpoint::{EndpointHandle, WorkerEndpoint};
@@ -134,7 +133,7 @@ pub fn build_service<C: Codec>(
             let role = PortRole::SlotPool(idx);
             layout.push_port(role, PortLayout::SlotPool(pool.wasm_layout()));
         }
-        slot_pools.push(Arc::new(Mutex::new(pool)));
+        slot_pools.push(Arc::new(SlotPoolHandle::new(pool)));
     }
 
     let endpoint = EndpointHandle {

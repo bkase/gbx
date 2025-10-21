@@ -24,4 +24,4 @@ pub use mailbox::{Mailbox, MailboxRecord, MailboxSend};
 pub use msg_ring::{Envelope, MsgRing, ProducerGrant, Record};
 pub use region::{SharedRegion, Uninit, Zeroed};
 pub use schema::*;
-pub use slot_pool::{SlotPool, SlotPoolConfig, SlotPop, SlotPush, SLOT_ALIGNMENT};
+pub use slot_pool::{SlotPool, SlotPoolConfig, SlotPoolHandle, SlotPop, SlotPush, SLOT_ALIGNMENT};
