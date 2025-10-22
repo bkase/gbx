@@ -1,9 +1,17 @@
-use crate::bus::Bus;
+use crate::bus::{Bus, IoRegs};
 use crate::exec::Exec;
 use crate::ppu_stub::CYCLES_PER_FRAME;
-use crate::{BusScalar, Core, CoreConfig, Model, Scalar};
+use crate::{mmu, BusScalar, Core, CoreConfig, Model, Scalar};
 use proptest::prelude::*;
 use std::sync::Arc;
+
+const LINE_CYCLES: u32 = 456;
+const MODE2_CYCLES: u32 = 80;
+const MODE3_CYCLES: u32 = 172;
+const FRAME_WIDTH: usize = 160;
+const FRAME_HEIGHT: usize = 144;
+const FRAME_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT * 4;
+const DMG_SHADES: [u8; 4] = [0xFF, 0xAA, 0x55, 0x00];
 
 /// Builds a scalar core with the provided program bytes at reset address 0x0100.
 fn core_with_program(bytes: &[u8]) -> Core<Scalar, BusScalar> {
@@ -368,6 +376,8 @@ fn frame_boundary() {
         Model::Dmg,
     );
 
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+
     let consumed = core.step_cycles(CYCLES_PER_FRAME);
     assert!(
         core.frame_ready(),
@@ -377,6 +387,393 @@ fn frame_boundary() {
         consumed >= CYCLES_PER_FRAME.min(consumed),
         "core should account for consumed cycles"
     );
+}
+
+#[test]
+fn ppu_line_and_vblank_progression() {
+    let rom = vec![0x00u8; 0x8000];
+    let mut core = Core::new(
+        BusScalar::new(Arc::from(rom.into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+
+    for _ in 0..144 {
+        core.ppu.step(LINE_CYCLES, &mut core.bus);
+    }
+
+    assert_eq!(
+        core.bus.io.read(IoRegs::LY),
+        144,
+        "LY should be 144 at VBlank start"
+    );
+    assert_eq!(
+        core.bus.io.read(IoRegs::STAT) & 0x03,
+        0x01,
+        "STAT mode should be 1"
+    );
+    assert_eq!(
+        core.bus.io.if_reg() & 0x01,
+        0x01,
+        "VBlank interrupt flag should be set"
+    );
+    assert!(
+        !core.ppu.frame_ready(),
+        "frame should not be ready mid-vblank"
+    );
+
+    for _ in 0..10 {
+        core.ppu.step(LINE_CYCLES, &mut core.bus);
+    }
+
+    assert_eq!(
+        core.bus.io.read(IoRegs::LY),
+        0,
+        "LY should wrap to 0 after VBlank"
+    );
+    assert!(core.ppu.frame_ready(), "frame should be ready at LY wrap");
+}
+
+#[test]
+fn ppu_stat_mode_interrupt_edges() {
+    let rom = vec![0x00u8; 0x8000];
+    let mut core = Core::new(
+        BusScalar::new(Arc::from(rom.into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+
+    core.bus.io.write(IoRegs::STAT, 0x20);
+    core.bus.io.set_if(0);
+    core.ppu.reset();
+    core.ppu.step(1, &mut core.bus);
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x02,
+        "mode 2 interrupt should trigger on entry"
+    );
+    core.bus.io.set_if(0);
+    core.ppu.step(1, &mut core.bus);
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x00,
+        "mode 2 interrupt should be edge-triggered"
+    );
+
+    core = Core::new(
+        BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+    core.bus.io.write(IoRegs::STAT, 0x08);
+    core.bus.io.set_if(0);
+    core.ppu.step(MODE2_CYCLES + MODE3_CYCLES, &mut core.bus);
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x02,
+        "mode 0 interrupt should trigger once"
+    );
+    core.bus.io.set_if(0);
+    core.ppu.step(4, &mut core.bus);
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x00,
+        "mode 0 interrupt should not re-fire within mode"
+    );
+
+    core = Core::new(
+        BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+    core.bus.io.write(IoRegs::STAT, 0x10);
+    core.bus.io.set_if(0);
+    for _ in 0..144 {
+        core.ppu.step(LINE_CYCLES, &mut core.bus);
+    }
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x02,
+        "mode 1 interrupt should trigger entering VBlank"
+    );
+    core.bus.io.set_if(0);
+    core.ppu.step(LINE_CYCLES, &mut core.bus);
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x00,
+        "mode 1 interrupt should be edge-triggered"
+    );
+}
+
+#[test]
+fn ppu_lyc_coincidence_interrupt() {
+    let rom = vec![0x00u8; 0x8000];
+    let mut core = Core::new(
+        BusScalar::new(Arc::from(rom.into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+    core.bus.io.write(IoRegs::LYC, 10);
+    core.bus.io.write(IoRegs::STAT, 0x40);
+    core.bus.io.set_if(0);
+
+    for _ in 0..10 {
+        core.ppu.step(LINE_CYCLES, &mut core.bus);
+    }
+
+    assert_eq!(core.bus.io.read(IoRegs::LY), 10);
+    assert_eq!(
+        core.bus.io.read(IoRegs::STAT) & 0x04,
+        0x04,
+        "coincidence flag should be set"
+    );
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x02,
+        "LYC interrupt should trigger on match"
+    );
+
+    core.bus.io.set_if(0);
+    core.ppu.step(LINE_CYCLES, &mut core.bus);
+    assert_eq!(
+        core.bus.io.read(IoRegs::STAT) & 0x04,
+        0x00,
+        "coincidence flag should clear on next line"
+    );
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x00,
+        "no interrupt when leaving coincidence"
+    );
+
+    core.bus.io.write(IoRegs::LYC, 12);
+    core.ppu.step(LINE_CYCLES, &mut core.bus);
+    assert_eq!(core.bus.io.read(IoRegs::LY), 12);
+    assert_eq!(core.bus.io.read(IoRegs::STAT) & 0x04, 0x04);
+    assert_eq!(
+        core.bus.io.if_reg() & 0x02,
+        0x02,
+        "coincidence interrupt should fire on new match"
+    );
+}
+
+#[test]
+fn lcd_off_freezes_state() {
+    let rom = vec![0x00u8; 0x8000];
+    let mut core = Core::new(
+        BusScalar::new(Arc::from(rom.into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+
+    core.ppu.step(LINE_CYCLES * 5, &mut core.bus);
+    assert!(core.bus.io.read(IoRegs::LY) > 0);
+
+    core.bus.io.write(IoRegs::LCDC, 0x00);
+    core.bus.io.set_if(0);
+    core.ppu.step(LINE_CYCLES, &mut core.bus);
+    assert_eq!(
+        core.bus.io.read(IoRegs::LY),
+        0,
+        "LY should reset when LCD disabled"
+    );
+    assert_eq!(
+        core.bus.io.read(IoRegs::STAT) & 0x03,
+        0x00,
+        "STAT mode should be 0 when off"
+    );
+    assert!(
+        !core.ppu.frame_ready(),
+        "frame flag should clear when LCD off"
+    );
+    assert_eq!(core.bus.io.if_reg(), 0, "no interrupts while LCD off");
+
+    core.ppu.step(LINE_CYCLES, &mut core.bus);
+    assert_eq!(core.bus.io.read(IoRegs::LY), 0, "LY should stay frozen");
+
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+    core.ppu.step(1, &mut core.bus);
+    assert_eq!(
+        core.bus.io.read(IoRegs::STAT) & 0x03,
+        0x02,
+        "LCD on resumes in mode 2"
+    );
+}
+
+#[test]
+fn ly_write_resets_register() {
+    let mut bus = BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice()));
+    bus.io.write(IoRegs::LY, 42);
+    mmu::write8_scalar(&mut bus, Scalar::from_u16(0xFF44), Scalar::from_u8(0x55));
+    assert_eq!(
+        bus.io.read(IoRegs::LY),
+        0,
+        "writing LY should reset it to 0"
+    );
+}
+
+#[test]
+fn bg_render_blanks_when_disabled() {
+    let rom = vec![0x00u8; 0x8000];
+    let mut core = Core::new(
+        BusScalar::new(Arc::from(rom.into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    let mut buf = vec![0xAA; FRAME_BYTES];
+
+    core.bus.io.write(IoRegs::LCDC, 0x00);
+    core.ppu.render_frame_bg(
+        &core.bus.io,
+        &core.bus.vram,
+        &mut buf,
+        FRAME_WIDTH as u16,
+        FRAME_HEIGHT as u16,
+    );
+    for px in buf.chunks_exact(4) {
+        assert_eq!(px[0], DMG_SHADES[0]);
+        assert_eq!(px[1], DMG_SHADES[0]);
+        assert_eq!(px[2], DMG_SHADES[0]);
+        assert_eq!(px[3], 0xFF);
+    }
+
+    core.bus.io.write(IoRegs::LCDC, 0x80);
+    core.ppu.render_frame_bg(
+        &core.bus.io,
+        &core.bus.vram,
+        &mut buf,
+        FRAME_WIDTH as u16,
+        FRAME_HEIGHT as u16,
+    );
+    for px in buf.chunks_exact(4) {
+        assert_eq!(px[0], DMG_SHADES[0]);
+        assert_eq!(px[1], DMG_SHADES[0]);
+        assert_eq!(px[2], DMG_SHADES[0]);
+        assert_eq!(px[3], 0xFF);
+    }
+}
+
+#[test]
+fn bg_render_unsigned_tile_data() {
+    let mut core = Core::new(
+        BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x91);
+    core.bus.io.write(IoRegs::BGP, 0xE4);
+
+    let tile_offset = 16usize;
+    core.bus.vram[tile_offset] = 0xFF;
+    core.bus.vram[tile_offset + 1] = 0x00;
+
+    let map_offset = 0x1800usize;
+    core.bus.vram[map_offset] = 0x01;
+
+    let mut buf = vec![0u8; FRAME_BYTES];
+    core.ppu.render_frame_bg(
+        &core.bus.io,
+        &core.bus.vram,
+        &mut buf,
+        FRAME_WIDTH as u16,
+        FRAME_HEIGHT as u16,
+    );
+
+    for x in 0..8 {
+        let idx = (x * 4) as usize;
+        assert_eq!(
+            buf[idx], DMG_SHADES[1],
+            "pixel {x} should use palette shade 1"
+        );
+        assert_eq!(buf[idx + 3], 0xFF);
+    }
+}
+
+#[test]
+fn bg_render_signed_tile_data() {
+    let mut core = Core::new(
+        BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x81);
+    core.bus.io.write(IoRegs::BGP, 0xE4);
+
+    let tile_offset = 0x0FF0usize; // 0x8FF0 - 0x8000
+    core.bus.vram[tile_offset] = 0x00;
+    core.bus.vram[tile_offset + 1] = 0xFF;
+
+    let map_offset = 0x1800usize;
+    core.bus.vram[map_offset] = 0xFF;
+
+    let mut buf = vec![0u8; FRAME_BYTES];
+    core.ppu.render_frame_bg(
+        &core.bus.io,
+        &core.bus.vram,
+        &mut buf,
+        FRAME_WIDTH as u16,
+        FRAME_HEIGHT as u16,
+    );
+
+    assert_eq!(buf[0], DMG_SHADES[2], "first pixel should use shade 2");
+    assert_eq!(buf[1], DMG_SHADES[2]);
+    assert_eq!(buf[2], DMG_SHADES[2]);
+    assert_eq!(buf[3], 0xFF);
+}
+
+#[test]
+fn bg_render_scroll_wraps() {
+    let mut core = Core::new(
+        BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice())),
+        CoreConfig::default(),
+        Model::Dmg,
+    );
+    core.bus.io.write(IoRegs::LCDC, 0x91);
+    core.bus.io.write(IoRegs::BGP, 0xE4);
+    core.bus.io.write(IoRegs::SCX, 252);
+    core.bus.io.write(IoRegs::SCY, 248);
+
+    let tile1 = 16usize;
+    core.bus.vram[tile1] = 0xFF;
+    core.bus.vram[tile1 + 1] = 0x00;
+
+    let tile2 = 32usize;
+    core.bus.vram[tile2] = 0x00;
+    core.bus.vram[tile2 + 1] = 0xFF;
+
+    let tile3 = 48usize;
+    core.bus.vram[tile3] = 0xFF;
+    core.bus.vram[tile3 + 1] = 0xFF;
+
+    let map_base = 0x1800usize;
+    core.bus.vram[map_base + 31 * 32 + 31] = 0x01;
+    core.bus.vram[map_base + 31 * 32] = 0x02;
+    core.bus.vram[map_base + 31] = 0x03;
+
+    let mut buf = vec![0u8; FRAME_BYTES];
+    core.ppu.render_frame_bg(
+        &core.bus.io,
+        &core.bus.vram,
+        &mut buf,
+        FRAME_WIDTH as u16,
+        FRAME_HEIGHT as u16,
+    );
+
+    let top_left = &buf[0..4];
+    assert_eq!(top_left[0], DMG_SHADES[1]);
+    assert_eq!(top_left[3], 0xFF);
+
+    let wrap_x = &buf[8 * 4..8 * 4 + 4];
+    assert_eq!(wrap_x[0], DMG_SHADES[2]);
+
+    let wrap_y = &buf[FRAME_WIDTH * 8 * 4..FRAME_WIDTH * 8 * 4 + 4];
+    assert_eq!(wrap_y[0], DMG_SHADES[3]);
 }
 
 /// Verifies consecutive `EI` instructions enable IME after the second opcode.

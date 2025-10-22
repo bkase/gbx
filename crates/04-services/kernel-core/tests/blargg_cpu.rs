@@ -1,3 +1,5 @@
+//! Blargg Game Boy CPU instruction acceptance tests executed against the scalar core.
+
 use kernel_core::{Core, Scalar};
 use testdata::{self, Expected};
 
@@ -41,8 +43,8 @@ fn assert_serial_passes(path: &str) {
 }
 
 fn assert_serial_passes_within(path: &str, max_cycles: u64) {
-    let meta = testdata::metadata(path)
-        .unwrap_or_else(|| panic!("missing metadata entry for {path}"));
+    let meta =
+        testdata::metadata(path).unwrap_or_else(|| panic!("missing metadata entry for {path}"));
     let expected = match meta.expected {
         Expected::SerialAscii(text) => text,
         other => panic!("ROM {path} does not declare serial ASCII expectation (found {other:?})"),
@@ -78,7 +80,10 @@ fn blargg_cpu_instrs_individual_suite() {
         ("blargg/cpu_instrs/individual/04-op r,imm.gb", 40_000_000),
         ("blargg/cpu_instrs/individual/05-op rp.gb", 40_000_000),
         ("blargg/cpu_instrs/individual/06-ld r,r.gb", 40_000_000),
-        ("blargg/cpu_instrs/individual/07-jr,jp,call,ret,rst.gb", 60_000_000),
+        (
+            "blargg/cpu_instrs/individual/07-jr,jp,call,ret,rst.gb",
+            60_000_000,
+        ),
         ("blargg/cpu_instrs/individual/08-misc instrs.gb", 60_000_000),
         ("blargg/cpu_instrs/individual/09-op r,r.gb", 40_000_000),
         ("blargg/cpu_instrs/individual/10-bit ops.gb", 60_000_000),

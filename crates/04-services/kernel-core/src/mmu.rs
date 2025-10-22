@@ -49,6 +49,8 @@ pub fn write8_scalar(
             let idx = (addr - 0xFF00) as usize;
             if idx == BusScalar::io_div_index() {
                 bus.io.set_div(0);
+            } else if idx == BusScalar::io_ly_index() {
+                bus.io.write(idx, 0);
             } else {
                 if idx == BusScalar::io_sc_index() && (value & 0x80) != 0 {
                     let data = bus.io.read(BusScalar::io_sb_index());
@@ -71,5 +73,9 @@ pub fn write8_scalar(
 impl BusScalar {
     pub(crate) fn io_div_index() -> usize {
         crate::bus::IoRegs::DIV
+    }
+
+    pub(crate) fn io_ly_index() -> usize {
+        crate::bus::IoRegs::LY
     }
 }

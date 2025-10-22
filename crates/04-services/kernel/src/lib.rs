@@ -83,7 +83,7 @@ impl KernelFarm {
     pub fn tick(&mut self, id: u16, budget: u32, out: &mut Vec<KernelRep>) {
         let inst = self.ensure_instance(id);
         let cycles = inst.step_cycles(budget);
-        if inst.frame_ready() {
+        let mut publish_frame = |inst: &mut Instance| -> bool {
             let sink = &inst.sink;
             let core = &mut inst.core;
             let (width, height) = sink.dimensions();
@@ -100,12 +100,24 @@ impl KernelFarm {
                     span: FrameSpan {
                         width,
                         height,
-                        pixels: Arc::from([]),
+                        pixels: Arc::from(&[][..]),
                         slot_span: Some(span),
                     },
                     frame_id,
                 });
+                true
+            } else {
+                false
             }
+        };
+
+        let mut published = false;
+        if inst.frame_ready() {
+            published = publish_frame(inst);
+        }
+
+        if !published {
+            publish_frame(inst);
         }
         out.push(KernelRep::TickDone {
             group: id,

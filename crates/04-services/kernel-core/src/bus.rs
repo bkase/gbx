@@ -142,6 +142,16 @@ impl IoRegs {
     pub const LY: usize = 0x44;
     /// Scanline compare register offset.
     pub const LYC: usize = 0x45;
+    /// Background palette register offset.
+    pub const BGP: usize = 0x47;
+    /// Object palette 0 register offset.
+    pub const OBP0: usize = 0x48;
+    /// Object palette 1 register offset.
+    pub const OBP1: usize = 0x49;
+    /// Window Y position register offset.
+    pub const WY: usize = 0x4A;
+    /// Window X position register offset.
+    pub const WX: usize = 0x4B;
 
     /// Creates zeroed IO registers.
     pub fn new() -> Self {

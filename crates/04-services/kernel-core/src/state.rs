@@ -72,10 +72,18 @@ pub struct TimersState {
 /// PPU stub persisted state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PpuState {
-    /// Cycle count carried since last frame.
-    pub cycles: u32,
+    /// Dot position within the active scanline.
+    pub dot_in_line: u32,
+    /// Currently latched LY value.
+    pub ly: u8,
+    /// Current PPU mode (0–3).
+    pub mode: u8,
+    /// Cached coincidence flag state.
+    pub lyc_equal: bool,
     /// Latched frame-ready flag.
     pub frame_ready: bool,
+    /// Whether the LCD controller was previously enabled.
+    pub lcd_was_on: bool,
 }
 
 impl From<&Timers> for TimersState {
@@ -98,8 +106,12 @@ impl Timers {
 impl From<&PpuStub> for PpuState {
     fn from(ppu: &PpuStub) -> Self {
         Self {
-            cycles: ppu.cycles,
+            dot_in_line: ppu.dot_in_line,
+            ly: ppu.ly,
+            mode: ppu.mode,
+            lyc_equal: ppu.lyc_equal,
             frame_ready: ppu.frame_ready,
+            lcd_was_on: ppu.lcd_was_on,
         }
     }
 }
@@ -107,8 +119,12 @@ impl From<&PpuStub> for PpuState {
 impl PpuStub {
     /// Restores counters from persisted state.
     pub fn load_state(&mut self, state: &PpuState) {
-        self.cycles = state.cycles;
+        self.dot_in_line = state.dot_in_line;
+        self.ly = state.ly;
+        self.mode = state.mode;
+        self.lyc_equal = state.lyc_equal;
         self.frame_ready = state.frame_ready;
+        self.lcd_was_on = state.lcd_was_on;
     }
 }
 
