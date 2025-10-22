@@ -153,6 +153,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     }
 
     fn execute_opcode(&mut self) -> u32 {
+        let pending_before = self.cpu.enable_ime_pending;
         let opcode = self.cpu.fetch8(&mut self.bus);
         let opcode_u8 = E::to_u8(opcode);
         let was_ei = opcode_u8 == 0xFB;
@@ -269,9 +270,9 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             0xFE => instr::op_alu_a_d8(self, AluOp::Cp),
             _ => instr::op_unimplemented(),
         };
-        if self.cpu.enable_ime_pending && !was_ei {
+        if pending_before {
             self.cpu.ime = true;
-            self.cpu.enable_ime_pending = false;
+            self.cpu.enable_ime_pending = was_ei;
         }
         cycles
     }

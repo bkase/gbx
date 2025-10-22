@@ -344,6 +344,57 @@ fn frame_boundary() {
     );
 }
 
+#[test]
+fn double_ei_sets_ime_after_second_instruction() {
+    let mut core = core_with_program(&[0xFB, 0xFB, 0x76]);
+    core.cpu.ime = false;
+    core.cpu.enable_ime_pending = false;
+
+    // Execute first EI.
+    core.step_cycles(4);
+    assert!(
+        !core.cpu.ime,
+        "IME should remain disabled immediately after EI"
+    );
+    assert!(
+        core.cpu.enable_ime_pending,
+        "EI must schedule IME enable on the next instruction"
+    );
+
+    // Execute second EI; IME should enable now and pending should stay latched.
+    core.step_cycles(4);
+    assert!(
+        core.cpu.ime,
+        "IME should enable after the instruction following EI"
+    );
+    assert!(
+        core.cpu.enable_ime_pending,
+        "Second EI must re-arm the pending flag for the next instruction"
+    );
+}
+
+#[test]
+fn ei_followed_by_nop_clears_pending() {
+    let mut core = core_with_program(&[0xFB, 0x00, 0x76]);
+    core.cpu.ime = false;
+    core.cpu.enable_ime_pending = false;
+
+    // First EI schedules IME enable.
+    core.step_cycles(4);
+    assert!(core.cpu.enable_ime_pending);
+
+    // NOP should trigger IME enable and clear pending.
+    core.step_cycles(4);
+    assert!(
+        core.cpu.ime,
+        "IME should enable after the instruction following EI"
+    );
+    assert!(
+        !core.cpu.enable_ime_pending,
+        "Pending flag must clear when a non-EI instruction runs"
+    );
+}
+
 proptest! {
     #[test]
     fn prop_adc_matches_reference(a in any::<u8>(), b in any::<u8>(), carry_in in any::<bool>()) {
