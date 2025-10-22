@@ -15,6 +15,17 @@ pub fn read8_scalar(bus: &mut BusScalar, addr: <Scalar as Exec>::U16) -> <Scalar
         0xFF00..=0xFF7F => {
             let idx = (addr - 0xFF00) as usize;
             match idx {
+                IoRegs::JOYP => {
+                    let sel = bus.joyp_select;
+                    let mut lo = 0x0F;
+                    if sel & 0x10 == 0 {
+                        lo &= bus.joyp_dpad;
+                    }
+                    if sel & 0x20 == 0 {
+                        lo &= bus.joyp_buttons;
+                    }
+                    0xC0 | sel | (!lo & 0x0F)
+                }
                 IoRegs::IF => bus.io.if_reg(),
                 IoRegs::LY => bus.lockstep_ly_override.unwrap_or_else(|| bus.io.read(idx)),
                 _ => bus.io.read(idx),
@@ -54,6 +65,21 @@ pub fn write8_scalar(
         0xFEA0..=0xFEFF => {}
         0xFF00..=0xFF7F => {
             let idx = (addr - 0xFF00) as usize;
+            if idx == 0x46 {
+                let base = u16::from(value) << 8;
+                for offset in 0..=0x9F {
+                    let src = Scalar::from_u16(base.wrapping_add(offset as u16));
+                    let byte = read8_scalar(bus, src);
+                    bus.oam[offset as usize] = Scalar::to_u8(byte);
+                }
+                return;
+            }
+            if idx == IoRegs::JOYP {
+                bus.joyp_select = value & 0x30;
+                let current = bus.io.read(idx);
+                bus.io.write(idx, (current & !0x30) | bus.joyp_select);
+                return;
+            }
             if idx == BusScalar::io_div_index() {
                 bus.io.set_div(0);
             } else if idx == BusScalar::io_ly_index() {

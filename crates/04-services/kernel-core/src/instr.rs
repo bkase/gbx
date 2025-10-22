@@ -922,6 +922,66 @@ pub fn op_cb<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, sub: u8) -> u32 {
     }
 }
 
+/// Returns from an interrupt handler and re-enables IME.
+#[inline(always)]
+pub fn op_reti<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+    let addr = core.cpu.pop16(&mut core.bus);
+    core.cpu.pc = addr;
+    core.cpu.ime = true;
+    CycleCost::Clocks16.as_u32()
+}
+
+/// Performs a restart to a fixed handler address.
+#[inline(always)]
+pub fn op_rst<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+    let target = (opcode & 0x38) as u16;
+    let ret = core.cpu.pc;
+    core.cpu.push16(&mut core.bus, ret);
+    core.cpu.pc = E::from_u16(target);
+    CycleCost::Clocks16.as_u32()
+}
+
+/// Returns conditionally from a subroutine.
+#[inline(always)]
+pub fn op_ret_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+    let cc = (opcode >> 3) & 0x03;
+    if cond::<E>(&core.cpu.f, cc) {
+        let addr = core.cpu.pop16(&mut core.bus);
+        core.cpu.pc = addr;
+        CycleCost::Clocks20.as_u32()
+    } else {
+        CycleCost::Clocks8.as_u32()
+    }
+}
+
+/// Performs a conditional absolute jump.
+#[inline(always)]
+pub fn op_jp_cc_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+    let addr = core.cpu.fetch16(&mut core.bus);
+    let cc = (opcode >> 3) & 0x03;
+    if cond::<E>(&core.cpu.f, cc) {
+        core.cpu.pc = addr;
+        CycleCost::Clocks16.as_u32()
+    } else {
+        CycleCost::Clocks12.as_u32()
+    }
+}
+
+/// Performs a conditional subroutine call.
+#[inline(always)]
+pub fn op_call_cc_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+    let addr = core.cpu.fetch16(&mut core.bus);
+    let cc = (opcode >> 3) & 0x03;
+    if cond::<E>(&core.cpu.f, cc) {
+        let ret = core.cpu.pc;
+        core.cpu.push16(&mut core.bus, ret);
+        core.cpu.pc = addr;
+        CycleCost::Clocks24.as_u32()
+    } else {
+        CycleCost::Clocks12.as_u32()
+    }
+}
+
 /// Performs an absolute jump.
 #[inline(always)]
 pub fn op_jp_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
@@ -938,18 +998,6 @@ pub fn op_ret<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
     CycleCost::Clocks16.as_u32()
 }
 
-/// Conditionally returns from a subroutine.
-#[inline(always)]
-pub fn op_ret_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, take: bool) -> u32 {
-    if take {
-        let addr = core.cpu.pop16(&mut core.bus);
-        core.cpu.pc = addr;
-        CycleCost::Clocks20.as_u32()
-    } else {
-        CycleCost::Clocks8.as_u32()
-    }
-}
-
 /// Calls a subroutine at an absolute address.
 #[inline(always)]
 pub fn op_call_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
@@ -958,18 +1006,4 @@ pub fn op_call_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
     core.cpu.push16(&mut core.bus, ret);
     core.cpu.pc = addr;
     CycleCost::Clocks24.as_u32()
-}
-
-/// Conditionally calls a subroutine at an absolute address.
-#[inline(always)]
-pub fn op_call_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, take: bool) -> u32 {
-    let addr = core.cpu.fetch16(&mut core.bus);
-    if take {
-        let ret = core.cpu.pc;
-        core.cpu.push16(&mut core.bus, ret);
-        core.cpu.pc = addr;
-        CycleCost::Clocks24.as_u32()
-    } else {
-        CycleCost::Clocks12.as_u32()
-    }
 }

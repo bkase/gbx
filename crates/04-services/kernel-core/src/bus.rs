@@ -54,6 +54,12 @@ pub struct BusScalar {
     pub serial_internal_clock: bool,
     /// Optional override for the LY register used by lockstep tests to mirror the oracle.
     pub lockstep_ly_override: Option<u8>,
+    /// Latched JOYP column select bits (P14/P15).
+    pub joyp_select: u8,
+    /// Latched button inputs (A, B, Select, Start), active-low.
+    pub joyp_buttons: u8,
+    /// Latched d-pad inputs (Right, Left, Up, Down), active-low.
+    pub joyp_dpad: u8,
 }
 
 impl BusScalar {
@@ -75,6 +81,9 @@ impl BusScalar {
             serial_bits_remaining: 0,
             serial_internal_clock: true,
             lockstep_ly_override: None,
+            joyp_select: 0x30,
+            joyp_buttons: 0x0F,
+            joyp_dpad: 0x0F,
         }
     }
 
@@ -82,6 +91,10 @@ impl BusScalar {
     pub fn load_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = rom;
         self.serial_out.clear();
+        self.reset_serial_state();
+        self.joyp_select = 0x30;
+        self.joyp_buttons = 0x0F;
+        self.joyp_dpad = 0x0F;
     }
 
     /// Returns the accumulated serial log as a string and clears the buffer.
@@ -198,6 +211,13 @@ impl BusScalar {
         self.io.set_if(if_reg);
 
         self.serial_out.push(self.serial_pending_data);
+    }
+
+    /// Updates the latched joypad inputs using active-low semantics per Game Boy hardware.
+    #[inline]
+    pub fn set_inputs(&mut self, joypad: u8) {
+        self.joyp_buttons = (joypad >> 4) & 0x0F;
+        self.joyp_dpad = joypad & 0x0F;
     }
 }
 

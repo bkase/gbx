@@ -74,7 +74,7 @@ impl Instance {
     pub fn set_inputs(&mut self, joypad: u8) {
         self.joypad = joypad;
         match &mut self.core {
-            AnyCore::Scalar(core) => core.bus.io.set_joyp(joypad),
+            AnyCore::Scalar(core) => core.bus.set_inputs(joypad),
         }
     }
 }

@@ -183,6 +183,7 @@ impl Core<Scalar, BusScalar> {
         self.bus.hram.copy_from_slice(&state.hram);
         self.bus.io.regs_mut().copy_from_slice(&state.io);
         self.bus.ie = state.ie;
+        self.bus.joyp_select = self.bus.io.joyp() & 0x30;
 
         self.timers.load_state(&state.timers);
         self.ppu.load_state(&state.ppu);
