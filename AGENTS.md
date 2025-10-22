@@ -35,6 +35,17 @@
 - Run `devenv tasks run test:workspace` before submitting any change; add targeted `cargo test -p <crate>` invocations when iterating.
 - Transport ABI goldens live under `crates/tests/golden/*.bin` and are verified by `devenv tasks run test:golden` (also run via the commit hook). Regenerate fixtures after intentional schema changes with `UPDATE_GOLDEN=1 devenv tasks run test:golden`, then commit the refreshed `.bin` files together with the schema bump.
 
+### Lockstep Oracle Workflow
+- Harness lives at `crates/04-services/kernel-core/tests/lockstep_sameboy.rs` and compares our scalar core against SameBoy via the `safeboy` bindings.
+- Always iterate inside the reproducible toolchain: `devenv shell cargo test -p kernel-core lockstep_cpu_instrs_02_interrupts -- --nocapture` (swap the test name for other ROMs such as `03_op_sp_hl` once earlier divergences are fixed).
+- On every test run the oracle prints the first divergence: register file snapshot, IE/IF flags, upcoming opcodes, and the last ~64 instruction boundaries for each core. Treat the first mismatch as **the** bug to chase; later differences cascade from it.
+- Typical loop:
+  1. Run the targeted lockstep test and capture the divergence (PC/opcode + history usually points at the precise instruction or interrupt edge).
+  2. Patch the kernel core to fix the identified behavior (flags, timing, IF/IE masking, etc.).
+  3. Re-run the same lockstep test until it passes silently (no output).
+  4. Advance to the next ROM (`03`, `04`, …) and repeat; the harness makes it straightforward to burn down issues one at a time.
+- Optional: add an integration test or regression case once a divergence is resolved so future edits don’t regress the same instruction path.
+
 ## Commit & Pull Request Guidelines
 - Use imperative present-tense commit subjects (`Add scheduler retry path`); group related changes per commit.
 - Ensure every commit builds and passes tests; re-run `format:workspace` and `lint:workspace` prior to pushing.

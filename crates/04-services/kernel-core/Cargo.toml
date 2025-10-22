@@ -8,3 +8,6 @@ edition = "2021"
 [dev-dependencies]
 proptest = "1.4"
 testdata = { path = "../../testdata" }
+safeboy = "0.2"
+anyhow = "1"
+pretty_assertions = "1"

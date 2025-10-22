@@ -5,6 +5,10 @@ let
     git
     fd
     ripgrep
+    cmake
+    pkg-config
+    llvmPackages_18.clang
+    llvmPackages_18.libclang
     cargo-nextest
     wasm-tools
     wabt
