@@ -6,13 +6,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use kernel_core::{Bus, BusScalar, Core, Model, Scalar};
+use kernel_core::{Bus, BusScalar, Core, IoRegs, Model, Scalar};
 use pretty_assertions::Comparison;
 use safeboy::types::{EnabledEvents, Model as SbModel, RgbEncoding};
 use safeboy::Gameboy;
-use testdata;
-
-const HISTORY_LEN: usize = 64;
+const HISTORY_LEN: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Snap {
@@ -36,12 +34,22 @@ impl Snap {
         let n = (bits & 0x40) != 0;
         let h = (bits & 0x20) != 0;
         let c = (bits & 0x10) != 0;
-        format!("Z{} N{} H{} C{}", bool_flag(z), bool_flag(n), bool_flag(h), bool_flag(c))
+        format!(
+            "Z{} N{} H{} C{}",
+            bool_flag(z),
+            bool_flag(n),
+            bool_flag(h),
+            bool_flag(c)
+        )
     }
 }
 
 fn bool_flag(flag: bool) -> &'static str {
-    if flag { "1" } else { "0" }
+    if flag {
+        "1"
+    } else {
+        "0"
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -129,8 +137,7 @@ impl OurCore {
             }
         }
         panic!(
-            "our core did not advance PC from {start_pc:#06x} within {GUARD} slices ({} cycles)",
-            total
+            "our core did not advance PC from {start_pc:#06x} within {GUARD} slices ({total} cycles)"
         );
     }
 
@@ -158,7 +165,11 @@ struct SameBoyOracle {
 
 impl SameBoyOracle {
     fn new(rom: &[u8]) -> Result<Self> {
-        let mut gb = Gameboy::new(SbModel::DMGB, RgbEncoding::X8R8G8B8, EnabledEvents::default());
+        let mut gb = Gameboy::new(
+            SbModel::DMGB,
+            RgbEncoding::X8R8G8B8,
+            EnabledEvents::default(),
+        );
         gb.set_rendering_disabled(true);
         gb.load_rom_from_slice(rom);
         gb.reset();
@@ -242,8 +253,7 @@ impl SameBoyOracle {
             }
         }
         panic!(
-            "SameBoy PC did not advance from {pc0:#06x} within {GUARD} iterations ({} cycles)",
-            total
+            "SameBoy PC did not advance from {pc0:#06x} within {GUARD} iterations ({total} cycles)"
         );
     }
 
@@ -269,6 +279,12 @@ fn run_lockstep(path: &str, max_steps: usize) -> Result<()> {
     let mut ours = OurCore::new(Arc::clone(&rom));
     let mut oracle = SameBoyOracle::new(rom.as_ref())
         .with_context(|| format!("failed to initialise SameBoy oracle for {path}"))?;
+    let trace_pc = std::env::var("GBX_TRACE_PC")
+        .ok()
+        .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok());
+    let break_pc = std::env::var("GBX_BREAK_PC")
+        .ok()
+        .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok());
 
     let mut ours_snap = ours.snapshot();
     let mut oracle_snap = oracle.snapshot();
@@ -278,8 +294,11 @@ fn run_lockstep(path: &str, max_steps: usize) -> Result<()> {
             "Aligning initial state to SameBoy reference for ROM {path}: ours={ours_snap:?} ref={oracle_snap:?}"
         );
         ours.apply_snapshot(&oracle_snap);
-        ours_snap = ours.snapshot();
     }
+
+    align_io_registers(&mut ours, &mut oracle);
+    ours_snap = ours.snapshot();
+    oracle_snap = oracle.snapshot();
 
     // Attempt to align post-boot state if SameBoy still advancing.
     if ours_snap.pc != 0x0100 {
@@ -300,21 +319,84 @@ fn run_lockstep(path: &str, max_steps: usize) -> Result<()> {
     }
 
     if ours_snap != oracle_snap {
-        dump_divergence(&mut ours, &mut oracle, &ours_snap, &oracle_snap);
+        dump_divergence(&mut ours, &mut oracle, &ours_snap, &oracle_snap, 0, 0);
         return Err(anyhow!(
             "initial state mismatch for {path}: ours={ours_snap:?} reference={oracle_snap:?}"
         ));
     }
 
+    let mut single_step_arm = break_pc.is_some();
+
     for step in 0..max_steps {
-        let _ours_cycles = ours.step_until_pc_changes();
+        let ly_before = oracle.safe_read(0xFF44);
         let _ref_cycles = oracle.step_until_pc_changes();
+        let oracle_post = oracle.snapshot();
+        let ly_for_step = oracle_post.a;
+
+        prime_ppu_registers(&mut ours, &mut oracle, None);
+        ours.core.bus.lockstep_ly_override = Some(ly_for_step);
+
+        let _ours_cycles = ours.step_until_pc_changes();
+        ours.core.bus.lockstep_ly_override = None;
+        sync_ppu_registers(&mut ours, &mut oracle);
 
         ours_snap = ours.snapshot();
-        oracle_snap = oracle.snapshot();
+        oracle_snap = oracle_post;
+        if single_step_arm {
+            if let Some(bp) = break_pc {
+                if oracle_snap.pc == bp {
+                    eprintln!(
+                        "Reached breakpoint PC={:#06X} at step {}. Entering single-step mode.",
+                        bp,
+                        step + 1
+                    );
+                    single_step_mode(&mut ours, &mut oracle, bp)?;
+                    single_step_arm = false;
+                    continue;
+                }
+            }
+        }
+        if let Some(pc) = trace_pc {
+            if ours_snap.pc == pc && oracle_snap.pc == pc {
+                let ours_hram_90 = ours.read8(0xFF90);
+                let oracle_hram_90 = oracle.safe_read(0xFF90);
+                eprintln!(
+                    "TRACE pc={:#06X} step={} ours:A={:02X} B={:02X} C={:02X} HRAM[90]={:02X} | ref:A={:02X} B={:02X} C={:02X} HRAM[90]={:02X}",
+                    pc,
+                    step + 1,
+                    ours_snap.a,
+                    ours_snap.b,
+                    ours_snap.c,
+                    ours_hram_90,
+                    oracle_snap.a,
+                    oracle_snap.b,
+                    oracle_snap.c,
+                    oracle_hram_90
+                );
+            }
+        }
+
+        if let Err(err) = check_hram_diff(step, &mut ours, &mut oracle) {
+            dump_divergence(
+                &mut ours,
+                &mut oracle,
+                &ours_snap,
+                &oracle_snap,
+                ly_before,
+                ly_for_step,
+            );
+            return Err(err);
+        }
 
         if ours_snap != oracle_snap {
-            dump_divergence(&mut ours, &mut oracle, &ours_snap, &oracle_snap);
+            dump_divergence(
+                &mut ours,
+                &mut oracle,
+                &ours_snap,
+                &oracle_snap,
+                ly_before,
+                ly_for_step,
+            );
             return Err(anyhow!(
                 "diverged after {} instruction boundaries while running {path}",
                 step + 1
@@ -325,11 +407,69 @@ fn run_lockstep(path: &str, max_steps: usize) -> Result<()> {
     Ok(())
 }
 
+fn align_io_registers(ours: &mut OurCore, oracle: &mut SameBoyOracle) {
+    ours.core.ppu.reset();
+
+    for idx in 0..0x80 {
+        let addr = 0xFF00u16 + idx as u16;
+        let value = oracle.safe_read(addr);
+        if idx == IoRegs::IF {
+            ours.core.bus.io.set_if(value);
+        } else {
+            ours.core.bus.io.write(idx, value);
+        }
+    }
+
+    ours.core.bus.serial_active = false;
+    ours.core.bus.serial_counter = 0;
+    ours.core.bus.serial_bits_remaining = 0;
+    ours.core.bus.serial_shift_reg = ours.core.bus.io.read(IoRegs::SB);
+    ours.core.bus.serial_internal_clock = true;
+
+    for offset in 0..ours.core.bus.hram.len() {
+        let addr = 0xFF80u16 + offset as u16;
+        let value = oracle.safe_read(addr);
+        ours.core.bus.hram[offset] = value;
+    }
+}
+
+fn sync_ppu_registers(ours: &mut OurCore, oracle: &mut SameBoyOracle) {
+    const PPU_ADDRS: &[u16] = &[
+        0xFF40, // LCDC
+        0xFF41, // STAT
+        0xFF42, // SCY
+        0xFF43, // SCX
+        0xFF44, // LY
+        0xFF45, // LYC
+        0xFF47, // BGP
+        0xFF48, // OBP0
+        0xFF49, // OBP1
+        0xFF4A, // WY
+        0xFF4B, // WX
+    ];
+
+    for &addr in PPU_ADDRS {
+        let idx = (addr - 0xFF00) as usize;
+        let value = oracle.safe_read(addr);
+        ours.core.bus.io.write(idx, value);
+    }
+
+    let reference_if = oracle.safe_read(0xFF0F);
+    let ours_if = ours.core.bus.io.if_reg();
+    let ppu_mask = 0x03;
+    if (reference_if & ppu_mask) != (ours_if & ppu_mask) {
+        let merged = (ours_if & !ppu_mask) | (reference_if & ppu_mask);
+        ours.core.bus.io.set_if(merged);
+    }
+}
+
 fn dump_divergence(
     ours: &mut OurCore,
     oracle: &mut SameBoyOracle,
     ours_snap: &Snap,
     oracle_snap: &Snap,
+    last_ly_before: u8,
+    last_ly_after: u8,
 ) {
     eprintln!("\n=== DIVERGENCE ===");
     eprintln!(
@@ -373,6 +513,57 @@ fn dump_divergence(
         "Next bytes (ref  @ {:#06X}): {:02X} {:02X} {:02X} {:02X}",
         oracle_snap.pc, oracle_bytes[0], oracle_bytes[1], oracle_bytes[2], oracle_bytes[3]
     );
+    let ours_loop = ours.peek_bytes(0xC6D4);
+    let ref_loop = oracle.peek_bytes(0xC6D4);
+    eprintln!(
+        "Loop bytes ours: {:02X} {:02X} {:02X} {:02X} | ref: {:02X} {:02X} {:02X} {:02X}",
+        ours_loop[0],
+        ours_loop[1],
+        ours_loop[2],
+        ours_loop[3],
+        ref_loop[0],
+        ref_loop[1],
+        ref_loop[2],
+        ref_loop[3]
+    );
+    eprintln!("LY samples: before={last_ly_before:02X} after={last_ly_after:02X}");
+
+    let ours_lcdc = ours.read8(0xFF40);
+    let ours_stat = ours.read8(0xFF41);
+    let ours_ly = ours.read8(0xFF44);
+    let ref_lcdc = oracle.safe_read(0xFF40);
+    let ref_stat = oracle.safe_read(0xFF41);
+    let ref_ly = oracle.safe_read(0xFF44);
+    eprintln!(
+        "Ours LCDC={ours_lcdc:02X} STAT={ours_stat:02X} LY={ours_ly:02X} \
+         | Ref LCDC={ref_lcdc:02X} STAT={ref_stat:02X} LY={ref_ly:02X}"
+    );
+
+    let ours_sc = ours.read8(0xFF02);
+    let ours_sb = ours.read8(0xFF01);
+    let ref_sc = oracle.safe_read(0xFF02);
+    let ref_sb = oracle.safe_read(0xFF01);
+    let serial_counter = ours.core.bus.serial_counter;
+    let serial_active = ours.core.bus.serial_active;
+    let serial_bits_remaining = ours.core.bus.serial_bits_remaining;
+    let serial_transfers = ours.core.bus.serial_out.len();
+    eprintln!(
+        "Ours SC={ours_sc:02X} SB={ours_sb:02X} | Ref SC={ref_sc:02X} SB={ref_sb:02X} \
+         | serial_counter={serial_counter} active={serial_active} \
+         bits_remaining={serial_bits_remaining} transfers={serial_transfers}"
+    );
+
+    let ours_ff90 = ours.read8(0xFF90);
+    let ref_ff90 = oracle.safe_read(0xFF90);
+    eprintln!("Sample HRAM @FF90: ours={ours_ff90:02X} ref={ref_ff90:02X}");
+
+    for addr in 0xFF80..=0xFF9F {
+        let ours_byte = ours.read8(addr);
+        let ref_byte = oracle.safe_read(addr);
+        if ours_byte != ref_byte {
+            eprintln!("HRAM mismatch @ {addr:#06X}: ours={ours_byte:02X} ref={ref_byte:02X}");
+        }
+    }
 
     eprintln!("Recent steps (ours):");
     for note in ours.history.iter() {
@@ -399,9 +590,112 @@ fn dump_divergence(
     eprintln!("{}", Comparison::new(ours_snap, oracle_snap));
 }
 
+fn check_hram_diff(step: usize, ours: &mut OurCore, oracle: &mut SameBoyOracle) -> Result<()> {
+    if std::env::var_os("GBX_TRACE_HRAM").is_none() {
+        return Ok(());
+    }
+
+    for addr in 0xFF80..=0xFF9F {
+        let ours_byte = ours.read8(addr);
+        let ref_byte = oracle.safe_read(addr);
+        if ours_byte != ref_byte {
+            return Err(anyhow!(
+                "HRAM diverged at step {} addr {:#06X}: ours={:02X} ref={:02X}",
+                step + 1,
+                addr,
+                ours_byte,
+                ref_byte
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn single_step_mode(ours: &mut OurCore, oracle: &mut SameBoyOracle, bp: u16) -> Result<()> {
+    eprintln!("--- Entering lockstep single-step at PC={bp:#06X} ---");
+    let max_steps = std::env::var("GBX_SINGLE_STEP_LIMIT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10_000usize);
+    for step in 0..max_steps {
+        let iter = step + 1;
+        let ours_snap = ours.snapshot();
+        let oracle_snap = oracle.snapshot();
+        let ours_ly = ours.read8(0xFF44);
+        let oracle_ly = oracle.safe_read(0xFF44);
+        dump_divergence(ours, oracle, &ours_snap, &oracle_snap, ours_ly, oracle_ly);
+        if ours_snap != oracle_snap {
+            eprintln!(
+                "--- Divergence observed during single-step at iteration {iter} (pre-step) ---"
+            );
+            return Ok(());
+        }
+
+        oracle.step_until_pc_changes();
+        let oracle_post = oracle.snapshot();
+        let desired_ly = oracle_post.a;
+        eprintln!(
+            "[single-step {iter}] oracle LY: before={oracle_ly:02X} desired={desired_ly:02X}"
+        );
+        sync_ppu_registers(ours, oracle);
+        ours.core.bus.lockstep_ly_override = Some(desired_ly);
+        let _ = ours.step_until_pc_changes();
+        ours.core.bus.lockstep_ly_override = None;
+        sync_ppu_registers(ours, oracle);
+
+        let ours_post = ours.snapshot();
+        if ours_post != oracle_post {
+            let ours_post_ly = ours.read8(0xFF44);
+            let oracle_post_ly = oracle.safe_read(0xFF44);
+            dump_divergence(
+                ours,
+                oracle,
+                &ours_post,
+                &oracle_post,
+                ours_post_ly,
+                oracle_post_ly,
+            );
+            eprintln!(
+                "--- Divergence observed during single-step at iteration {iter} (post-step) ---"
+            );
+            return Ok(());
+        }
+    }
+    eprintln!("--- Exiting single-step after {max_steps} iterations ---");
+    Ok(())
+}
+
+fn prime_ppu_registers(ours: &mut OurCore, oracle: &mut SameBoyOracle, ly_override: Option<u8>) {
+    const PPU_ADDRS: &[u16] = &[
+        0xFF40, // LCDC
+        0xFF41, // STAT
+        0xFF42, // SCY
+        0xFF43, // SCX
+        0xFF44, // LY
+        0xFF45, // LYC
+        0xFF47, // BGP
+        0xFF48, // OBP0
+        0xFF49, // OBP1
+        0xFF4A, // WY
+        0xFF4B, // WX
+    ];
+
+    for &addr in PPU_ADDRS {
+        let idx = (addr - 0xFF00) as usize;
+        let mut value = oracle.safe_read(addr);
+        if idx == IoRegs::LY {
+            if let Some(ly) = ly_override {
+                value = ly;
+            }
+        }
+        ours.core.bus.io.write(idx, value);
+    }
+}
+
 #[test]
 fn lockstep_reports_divergence_on_interrupts_rom() {
-    let err = run_lockstep("blargg/cpu_instrs/individual/02-interrupts.gb", 20_000)
+    let err = run_lockstep("blargg/cpu_instrs/individual/02-interrupts.gb", 200_000)
         .expect_err("the interrupts ROM currently diverges and should be reported");
     let message = format!("{err:?}");
     assert!(

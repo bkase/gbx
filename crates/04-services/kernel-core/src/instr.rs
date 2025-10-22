@@ -8,7 +8,6 @@
 use crate::bus::Bus;
 use crate::core::Core;
 use crate::exec::{Exec, Flags};
-
 /// Execution cost for common instruction classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CycleCost {
@@ -270,7 +269,8 @@ pub fn op_ldh_a8_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 pub fn op_ldh_a_a8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
     let offset = core.cpu.fetch8(&mut core.bus);
     let addr = E::from_u16(0xFF00 | u16::from(E::to_u8(offset)));
-    core.cpu.a = core.bus.read8(addr);
+    let value = core.bus.read8(addr);
+    core.cpu.a = value;
     CycleCost::Clocks12.as_u32()
 }
 
@@ -743,6 +743,14 @@ pub fn op_stop<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
     CycleCost::Clocks4.as_u32()
 }
 
+/// Jumps to the address stored in HL.
+#[inline(always)]
+pub fn op_jp_hl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+    let addr = core.cpu.hl();
+    core.cpu.pc = addr;
+    CycleCost::Clocks4.as_u32()
+}
+
 /// Pushes a register pair onto the stack.
 #[inline(always)]
 pub fn op_push_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
@@ -930,6 +938,18 @@ pub fn op_ret<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
     CycleCost::Clocks16.as_u32()
 }
 
+/// Conditionally returns from a subroutine.
+#[inline(always)]
+pub fn op_ret_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, take: bool) -> u32 {
+    if take {
+        let addr = core.cpu.pop16(&mut core.bus);
+        core.cpu.pc = addr;
+        CycleCost::Clocks20.as_u32()
+    } else {
+        CycleCost::Clocks8.as_u32()
+    }
+}
+
 /// Calls a subroutine at an absolute address.
 #[inline(always)]
 pub fn op_call_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
@@ -938,4 +958,18 @@ pub fn op_call_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
     core.cpu.push16(&mut core.bus, ret);
     core.cpu.pc = addr;
     CycleCost::Clocks24.as_u32()
+}
+
+/// Conditionally calls a subroutine at an absolute address.
+#[inline(always)]
+pub fn op_call_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, take: bool) -> u32 {
+    let addr = core.cpu.fetch16(&mut core.bus);
+    if take {
+        let ret = core.cpu.pc;
+        core.cpu.push16(&mut core.bus, ret);
+        core.cpu.pc = addr;
+        CycleCost::Clocks24.as_u32()
+    } else {
+        CycleCost::Clocks12.as_u32()
+    }
 }

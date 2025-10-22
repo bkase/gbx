@@ -1,4 +1,4 @@
-use crate::bus::{Bus, BusScalar, InterruptCtrl};
+use crate::bus::{Bus, BusScalar, InterruptCtrl, SerialIo};
 use crate::cpu::Cpu;
 use crate::exec::{Exec, Scalar};
 use crate::instr::{self, AluOp};
@@ -43,6 +43,7 @@ pub struct Core<E: Exec, B: Bus<E>> {
     pub ppu: PpuStub,
     /// Cycle budget accumulated within the current frame.
     pub cycles_this_frame: u32,
+    ppu_enabled: bool,
     config: CoreConfig,
     model: Model,
 }
@@ -56,6 +57,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             timers: Timers::new(),
             ppu: PpuStub::new(),
             cycles_this_frame: 0,
+            ppu_enabled: true,
             config,
             model,
         }
@@ -68,6 +70,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
         self.timers.reset();
         self.ppu.reset();
         self.cycles_this_frame = 0;
+        self.ppu_enabled = true;
         match model {
             Model::Dmg => {
                 // Classic DMG register defaults per Pan Docs reference.
@@ -97,6 +100,12 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     #[inline]
     pub fn frame_ready(&self) -> bool {
         self.ppu.frame_ready()
+    }
+
+    /// Enables or disables PPU stepping.
+    #[inline]
+    pub fn set_ppu_enabled(&mut self, enabled: bool) {
+        self.ppu_enabled = enabled;
     }
 
     /// Renders the current frame into `out_rgba`.
@@ -134,7 +143,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     /// Executes instructions until the cycle budget is exhausted or a frame boundary is hit.
     pub fn step_cycles(&mut self, mut budget: u32) -> u32
     where
-        B: TimerIo + InterruptCtrl + PpuIo,
+        B: TimerIo + InterruptCtrl + PpuIo + SerialIo,
     {
         if budget == 0 {
             return 0;
@@ -151,9 +160,16 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
                 }
             }
 
-            let step = cycles.min(budget);
+            let step = cycles;
+            if step == 0 {
+                continue;
+            }
+
             self.timers.step(step, &mut self.bus);
-            self.ppu.step(step, &mut self.bus);
+            if self.ppu_enabled {
+                self.ppu.step(step, &mut self.bus);
+            }
+            self.bus.step_serial(step);
             self.cycles_this_frame = self.cycles_this_frame.wrapping_add(step);
 
             consumed = consumed.wrapping_add(step);
@@ -249,20 +265,28 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             0xA8..=0xAF => instr::op_alu_a_r(self, opcode_u8, AluOp::Xor),
             0xB0..=0xB7 => instr::op_alu_a_r(self, opcode_u8, AluOp::Or),
             0xB8..=0xBF => instr::op_alu_a_r(self, opcode_u8, AluOp::Cp),
+            0xC0 => instr::op_ret_cc(self, !self.cpu.f.z()),
             0xC1 => instr::op_pop_rr(self, 0),
             0xC3 => instr::op_jp_a16(self),
+            0xC4 => instr::op_call_cc(self, !self.cpu.f.z()),
             0xC5 => instr::op_push_rr(self, 0),
             0xC6 => instr::op_alu_a_d8(self, AluOp::Add),
+            0xC8 => instr::op_ret_cc(self, self.cpu.f.z()),
             0xC9 => instr::op_ret(self),
             0xCB => {
                 let sub = self.cpu.fetch8(&mut self.bus);
                 instr::op_cb(self, E::to_u8(sub))
             }
             0xCD => instr::op_call_a16(self),
+            0xCC => instr::op_call_cc(self, self.cpu.f.z()),
             0xCE => instr::op_alu_a_d8(self, AluOp::Adc),
+            0xD0 => instr::op_ret_cc(self, !self.cpu.f.c()),
             0xD1 => instr::op_pop_rr(self, 1),
+            0xD4 => instr::op_call_cc(self, !self.cpu.f.c()),
             0xD5 => instr::op_push_rr(self, 1),
             0xD6 => instr::op_alu_a_d8(self, AluOp::Sub),
+            0xD8 => instr::op_ret_cc(self, self.cpu.f.c()),
+            0xDC => instr::op_call_cc(self, self.cpu.f.c()),
             0xDE => instr::op_alu_a_d8(self, AluOp::Sbc),
             0xE0 => instr::op_ldh_a8_a(self),
             0xE1 => instr::op_pop_rr(self, 2),
@@ -270,6 +294,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             0xE5 => instr::op_push_rr(self, 2),
             0xE6 => instr::op_alu_a_d8(self, AluOp::And),
             0xE8 => instr::op_add_sp_e8(self),
+            0xE9 => instr::op_jp_hl(self),
             0xEA => instr::op_ld_a16_a(self),
             0xEE => instr::op_alu_a_d8(self, AluOp::Xor),
             0xF0 => instr::op_ldh_a_a8(self),

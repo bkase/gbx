@@ -216,8 +216,10 @@ fn serial_transfer_accumulates_output() {
 
     core.bus.write8(data_addr, Scalar::from_u8(b'O'));
     core.bus.write8(ctrl_addr, Scalar::from_u8(0x81));
+    core.step_cycles(8 * 512);
     core.bus.write8(data_addr, Scalar::from_u8(b'K'));
     core.bus.write8(ctrl_addr, Scalar::from_u8(0x81));
+    core.step_cycles(8 * 512);
 
     let mut expected = String::new();
     expected.push('O');
@@ -592,7 +594,11 @@ fn lcd_off_freezes_state() {
         !core.ppu.frame_ready(),
         "frame flag should clear when LCD off"
     );
-    assert_eq!(core.bus.io.if_reg(), 0, "no interrupts while LCD off");
+    assert_eq!(
+        core.bus.io.if_reg() & 0x1F,
+        0,
+        "no interrupts while LCD off"
+    );
 
     core.ppu.step(LINE_CYCLES, &mut core.bus);
     assert_eq!(core.bus.io.read(IoRegs::LY), 0, "LY should stay frozen");

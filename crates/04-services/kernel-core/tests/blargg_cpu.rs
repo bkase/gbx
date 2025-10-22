@@ -116,7 +116,6 @@ fn blargg_cpu_instrs_02_interrupts_passes() {
 }
 
 #[test]
-#[ignore = "run on demand while bringing up CPU coverage"]
 fn blargg_cpu_instrs_03_op_sp_hl_passes() {
     assert_serial_passes_within("blargg/cpu_instrs/individual/03-op sp,hl.gb", 40_000_000);
 }

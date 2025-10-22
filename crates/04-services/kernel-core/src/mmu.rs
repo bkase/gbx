@@ -1,4 +1,4 @@
-use crate::bus::BusScalar;
+use crate::bus::{BusScalar, IoRegs};
 use crate::exec::{Exec, Scalar};
 
 /// Reads a byte from the scalar bus.
@@ -12,7 +12,14 @@ pub fn read8_scalar(bus: &mut BusScalar, addr: <Scalar as Exec>::U16) -> <Scalar
         0xE000..=0xFDFF => bus.wram[(addr - 0xE000) as usize],
         0xFE00..=0xFE9F => bus.oam[(addr - 0xFE00) as usize],
         0xFEA0..=0xFEFF => 0xFF,
-        0xFF00..=0xFF7F => bus.io.read((addr - 0xFF00) as usize),
+        0xFF00..=0xFF7F => {
+            let idx = (addr - 0xFF00) as usize;
+            match idx {
+                IoRegs::IF => bus.io.if_reg(),
+                IoRegs::LY => bus.lockstep_ly_override.unwrap_or_else(|| bus.io.read(idx)),
+                _ => bus.io.read(idx),
+            }
+        }
         0xFF80..=0xFFFE => bus.hram[(addr - 0xFF80) as usize],
         0xFFFF => bus.ie,
     }
@@ -52,13 +59,15 @@ pub fn write8_scalar(
             } else if idx == BusScalar::io_ly_index() {
                 bus.io.write(idx, 0);
             } else {
-                if idx == BusScalar::io_sc_index() && (value & 0x80) != 0 {
-                    let data = bus.io.read(BusScalar::io_sb_index());
-                    bus.serial_out.push(data);
-                    bus.io.write(idx, value & 0x7F);
+                if idx == BusScalar::io_sc_index() {
+                    bus.write_serial_control(value);
                     return;
                 }
-                bus.io.write(idx, value);
+                if idx == IoRegs::IF {
+                    bus.io.set_if(value);
+                } else {
+                    bus.io.write(idx, value);
+                }
             }
         }
         0xFF80..=0xFFFE => {

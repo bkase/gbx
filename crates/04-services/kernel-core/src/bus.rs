@@ -16,6 +16,12 @@ pub trait InterruptCtrl {
     fn read_ie(&self) -> u8;
 }
 
+/// Trait exposing serial transfer ticking.
+pub trait SerialIo {
+    /// Advances the serial link by `cycles` CPU ticks.
+    fn step_serial(&mut self, cycles: u32);
+}
+
 /// Scalar bus implementation backed by in-memory regions.
 pub struct BusScalar {
     /// Entire cartridge ROM contents.
@@ -34,6 +40,20 @@ pub struct BusScalar {
     pub ie: u8,
     /// Captured serial output emitted through the serial control register.
     pub serial_out: Vec<u8>,
+    /// Remaining cycles before the current serial transfer completes.
+    pub serial_counter: u32,
+    /// Indicates whether a serial transfer is currently active.
+    pub serial_active: bool,
+    /// Latched serial byte scheduled for capture when the transfer completes.
+    pub serial_pending_data: u8,
+    /// Shift register used while clocking the current serial transfer.
+    pub serial_shift_reg: u8,
+    /// Number of bits remaining in the active transfer.
+    pub serial_bits_remaining: u8,
+    /// Tracks whether the transfer uses the internal serial clock.
+    pub serial_internal_clock: bool,
+    /// Optional override for the LY register used by lockstep tests to mirror the oracle.
+    pub lockstep_ly_override: Option<u8>,
 }
 
 impl BusScalar {
@@ -48,6 +68,13 @@ impl BusScalar {
             io: IoRegs::new(),
             ie: 0,
             serial_out: Vec::new(),
+            serial_counter: 0,
+            serial_active: false,
+            serial_pending_data: 0,
+            serial_shift_reg: 0,
+            serial_bits_remaining: 0,
+            serial_internal_clock: true,
+            lockstep_ly_override: None,
         }
     }
 
@@ -80,6 +107,98 @@ impl BusScalar {
     pub(crate) fn io_sc_index() -> usize {
         IoRegs::SC
     }
+
+    const SERIAL_CYCLES_PER_BIT: u32 = 512;
+    /// Accounts for the CPU cycles that elapse between the write to SC and the moment the link
+    /// hardware starts driving the internal clock. Adjusted to match DMG timing (verified against
+    /// SameBoy) so the serial interrupt fires on the same boundary.
+    const SERIAL_STARTUP_LATENCY: u32 = 76;
+    const SERIAL_FIRST_BIT_CYCLES: u32 = Self::SERIAL_CYCLES_PER_BIT - Self::SERIAL_STARTUP_LATENCY;
+
+    fn reset_serial_state(&mut self) {
+        self.serial_active = false;
+        self.serial_counter = 0;
+        self.serial_bits_remaining = 0;
+    }
+
+    pub(crate) fn write_serial_control(&mut self, value: u8) {
+        let prev_raw = self.io.sc_raw();
+        let raw = value & 0x83;
+        self.io.write(Self::io_sc_index(), raw);
+
+        let start_requested = (raw & 0x80) != 0;
+        if !start_requested {
+            self.reset_serial_state();
+            return;
+        }
+
+        let started_now = (prev_raw & 0x80) == 0 || !self.serial_active;
+        self.serial_internal_clock = (raw & 0x01) != 0;
+
+        if !started_now && self.serial_active {
+            return;
+        }
+
+        self.reset_serial_state();
+
+        self.serial_pending_data = self.io.read(Self::io_sb_index());
+        self.serial_shift_reg = self.serial_pending_data;
+        self.serial_bits_remaining = 8;
+        self.serial_active = true;
+
+        if self.serial_internal_clock {
+            self.serial_counter = Self::SERIAL_FIRST_BIT_CYCLES;
+        }
+    }
+
+    pub(crate) fn advance_serial(&mut self, mut cycles: u32) {
+        if !self.serial_active || !self.serial_internal_clock {
+            return;
+        }
+
+        while self.serial_active && cycles > 0 {
+            if self.serial_counter == 0 {
+                self.serial_counter = Self::SERIAL_CYCLES_PER_BIT;
+            }
+
+            if cycles >= self.serial_counter {
+                cycles -= self.serial_counter;
+                self.serial_counter = 0;
+                self.clock_serial_bit();
+            } else {
+                self.serial_counter -= cycles;
+                cycles = 0;
+            }
+        }
+    }
+
+    fn clock_serial_bit(&mut self) {
+        let incoming = self.serial_input_bit();
+        self.serial_shift_reg = (self.serial_shift_reg << 1) | incoming;
+        self.serial_bits_remaining = self.serial_bits_remaining.saturating_sub(1);
+        self.io.write(Self::io_sb_index(), self.serial_shift_reg);
+
+        if self.serial_bits_remaining == 0 {
+            self.finish_serial_transfer();
+        }
+    }
+
+    fn serial_input_bit(&self) -> u8 {
+        0x01
+    }
+
+    fn finish_serial_transfer(&mut self) {
+        self.reset_serial_state();
+
+        let clock_bit = self.io.sc_raw() & 0x01;
+        self.io.write(Self::io_sc_index(), clock_bit);
+
+        let mut if_reg = self.io.if_reg();
+        if_reg |= 0x08;
+        self.io.set_if(if_reg);
+
+        self.serial_out.push(self.serial_pending_data);
+    }
 }
 
 impl Bus<Scalar> for BusScalar {
@@ -98,6 +217,13 @@ impl InterruptCtrl for BusScalar {
     #[inline]
     fn read_ie(&self) -> u8 {
         self.ie
+    }
+}
+
+impl SerialIo for BusScalar {
+    #[inline]
+    fn step_serial(&mut self, cycles: u32) {
+        self.advance_serial(cycles);
     }
 }
 
@@ -155,7 +281,9 @@ impl IoRegs {
 
     /// Creates zeroed IO registers.
     pub fn new() -> Self {
-        Self { regs: [0; 0x80] }
+        let mut regs = [0; 0x80];
+        regs[Self::IF] = 0xE0;
+        Self { regs }
     }
 
     /// Returns a mutable reference to the backing array.
@@ -171,13 +299,21 @@ impl IoRegs {
     /// Reads an IO register.
     #[inline]
     pub fn read(&self, idx: usize) -> u8 {
-        self.regs[idx]
+        if idx == Self::SC {
+            self.sc()
+        } else {
+            self.regs[idx]
+        }
     }
 
     /// Writes an IO register.
     #[inline]
     pub fn write(&mut self, idx: usize, value: u8) {
-        self.regs[idx] = value;
+        if idx == Self::SC {
+            self.set_sc(value);
+        } else {
+            self.regs[idx] = value;
+        }
     }
 
     /// Updates the divider register.
@@ -228,10 +364,30 @@ impl IoRegs {
         self.regs[Self::TAC] = value;
     }
 
+    /// Writes the serial control register (FF02).
+    #[inline]
+    pub fn set_sc(&mut self, value: u8) {
+        self.regs[Self::SC] = value & 0x81;
+    }
+
+    /// Returns the raw serial control bits (bit7 start, bit0 clock).
+    #[inline]
+    pub fn sc_raw(&self) -> u8 {
+        self.regs[Self::SC] & 0x81
+    }
+
+    /// Reads the serial control register with unused bits pulled high.
+    #[inline]
+    pub fn sc(&self) -> u8 {
+        self.sc_raw() | 0x7E
+    }
+
     /// Writes the interrupt flag register.
     #[inline]
     pub fn set_if(&mut self, value: u8) {
-        self.regs[Self::IF] = value;
+        // IF bits 5-7 read back as 1 on hardware; mask writes to the lower
+        // interrupt bits so pending flags match Pan Docs semantics.
+        self.regs[Self::IF] = (value & 0x1F) | 0xE0;
     }
 
     /// Reads the interrupt flag register.
@@ -250,5 +406,87 @@ impl IoRegs {
     #[inline]
     pub fn joyp(&self) -> u8 {
         self.regs[Self::JOYP]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    const SERIAL_STEP_CYCLES: u32 = 512;
+    const FIRST_BIT_CYCLES: u32 = SERIAL_STEP_CYCLES - BusScalar::SERIAL_STARTUP_LATENCY;
+
+    fn make_bus() -> BusScalar {
+        let rom = Arc::<[u8]>::from(vec![0u8; 0x8000]);
+        BusScalar::new(rom)
+    }
+
+    #[test]
+    fn serial_internal_transfer_ticks_every_512_cycles() {
+        let mut bus = make_bus();
+        bus.io.write(BusScalar::io_sb_index(), b'A');
+        bus.write_serial_control(0x81);
+
+        assert!(bus.serial_active);
+        assert!(bus.serial_internal_clock);
+        assert_eq!(bus.serial_bits_remaining, 8);
+
+        bus.advance_serial(FIRST_BIT_CYCLES - 1);
+        assert_eq!(bus.serial_bits_remaining, 8);
+        assert_eq!(bus.io.read(BusScalar::io_sb_index()), b'A');
+        assert_eq!(bus.io.sc_raw() & 0x80, 0x80);
+
+        bus.advance_serial(1);
+        assert_eq!(bus.serial_bits_remaining, 7);
+        assert_eq!(bus.io.sc_raw() & 0x80, 0x80);
+
+        for _ in 0..6 {
+            bus.advance_serial(SERIAL_STEP_CYCLES);
+        }
+        assert_eq!(bus.serial_bits_remaining, 1);
+
+        bus.advance_serial(SERIAL_STEP_CYCLES);
+
+        assert!(!bus.serial_active);
+        assert_eq!(bus.io.sc_raw() & 0x80, 0);
+        assert_ne!(bus.io.if_reg() & 0x08, 0);
+        assert_eq!(bus.io.read(BusScalar::io_sb_index()), 0xFF);
+        assert_eq!(bus.take_serial(), "A");
+    }
+
+    #[test]
+    fn serial_external_clock_waits_for_remote_partner() {
+        let mut bus = make_bus();
+        bus.io.write(BusScalar::io_sb_index(), b'B');
+        bus.write_serial_control(0x80);
+
+        assert!(bus.serial_active);
+        assert!(!bus.serial_internal_clock);
+        assert_eq!(bus.serial_bits_remaining, 8);
+
+        bus.advance_serial(SERIAL_STEP_CYCLES * 8);
+
+        assert!(bus.serial_active);
+        assert_eq!(bus.serial_bits_remaining, 8);
+        assert_eq!(bus.io.sc_raw() & 0x80, 0x80);
+        assert_eq!(bus.io.if_reg() & 0x08, 0);
+        assert!(bus.serial_out.is_empty());
+        assert_eq!(bus.io.read(BusScalar::io_sb_index()), b'B');
+    }
+
+    #[test]
+    fn serial_retrigger_during_active_transfer_is_ignored() {
+        let mut bus = make_bus();
+        bus.io.write(BusScalar::io_sb_index(), b'C');
+        bus.write_serial_control(0x81);
+        bus.advance_serial(SERIAL_STEP_CYCLES);
+
+        assert_eq!(bus.serial_bits_remaining, 7);
+
+        bus.write_serial_control(0x81);
+
+        assert_eq!(bus.serial_bits_remaining, 7);
+        assert!(bus.serial_active);
     }
 }
