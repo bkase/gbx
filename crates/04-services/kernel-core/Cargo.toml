@@ -7,3 +7,4 @@ edition = "2021"
 
 [dev-dependencies]
 proptest = "1.4"
+testdata = { path = "../../testdata" }

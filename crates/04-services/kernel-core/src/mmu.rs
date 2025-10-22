@@ -50,6 +50,12 @@ pub fn write8_scalar(
             if idx == BusScalar::io_div_index() {
                 bus.io.set_div(0);
             } else {
+                if idx == BusScalar::io_sc_index() && (value & 0x80) != 0 {
+                    let data = bus.io.read(BusScalar::io_sb_index());
+                    bus.serial_out.push(data);
+                    bus.io.write(idx, value & 0x7F);
+                    return;
+                }
                 bus.io.write(idx, value);
             }
         }

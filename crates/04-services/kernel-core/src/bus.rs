@@ -32,6 +32,8 @@ pub struct BusScalar {
     pub io: IoRegs,
     /// Interrupt enable register at `0xFFFF`.
     pub ie: u8,
+    /// Captured serial output emitted through the serial control register.
+    pub serial_out: Vec<u8>,
 }
 
 impl BusScalar {
@@ -45,12 +47,38 @@ impl BusScalar {
             hram: [0; 0x7F],
             io: IoRegs::new(),
             ie: 0,
+            serial_out: Vec::new(),
         }
     }
 
     /// Replaces the ROM contents.
     pub fn load_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = rom;
+        self.serial_out.clear();
+    }
+
+    /// Returns the accumulated serial log as a string and clears the buffer.
+    pub fn take_serial(&mut self) -> String {
+        let bytes = std::mem::take(&mut self.serial_out);
+        match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(err) => {
+                let bytes = err.into_bytes();
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+        }
+    }
+
+    /// Returns the IO register index for the serial data register.
+    #[inline]
+    pub(crate) fn io_sb_index() -> usize {
+        IoRegs::SB
+    }
+
+    /// Returns the IO register index for the serial control register.
+    #[inline]
+    pub(crate) fn io_sc_index() -> usize {
+        IoRegs::SC
     }
 }
 
@@ -88,6 +116,10 @@ impl Default for IoRegs {
 impl IoRegs {
     /// JOYP register offset.
     pub const JOYP: usize = 0x00;
+    /// Serial transfer data register.
+    pub const SB: usize = 0x01;
+    /// Serial transfer control register.
+    pub const SC: usize = 0x02;
     /// Divider register offset.
     pub const DIV: usize = 0x04;
     /// Timer counter register offset.

@@ -199,6 +199,25 @@ fn daa_adjusts_after_add_and_sub() {
     assert!(core.cpu.f.n());
 }
 
+/// Captures serial transfers triggered via writes to the SC register.
+#[test]
+fn serial_transfer_accumulates_output() {
+    let mut core = core_with_program(&[0x76]);
+    let data_addr = Scalar::from_u16(0xFF01);
+    let ctrl_addr = Scalar::from_u16(0xFF02);
+
+    core.bus.write8(data_addr, Scalar::from_u8(b'O'));
+    core.bus.write8(ctrl_addr, Scalar::from_u8(0x81));
+    core.bus.write8(data_addr, Scalar::from_u8(b'K'));
+    core.bus.write8(ctrl_addr, Scalar::from_u8(0x81));
+
+    let mut expected = String::new();
+    expected.push('O');
+    expected.push('K');
+
+    assert_eq!(core.bus.take_serial(), expected);
+}
+
 /// Checks all four accumulator rotate opcodes for proper carry handling.
 #[test]
 fn rotate_a_variants() {
