@@ -771,45 +771,119 @@ pub fn op_pop_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
     CycleCost::Clocks12.as_u32()
 }
 
+/// Implements the CB-prefixed `RLC r` mnemonic.
 #[inline(always)]
-fn cb_rot(value: u8, variant: u8, carry_in: bool) -> (u8, bool) {
-    match variant {
-        0 => {
-            let carry = (value & 0x80) != 0;
-            (value.rotate_left(1), carry)
-        }
-        1 => {
-            let carry = (value & 0x01) != 0;
-            (value.rotate_right(1), carry)
-        }
-        2 => {
-            let carry = (value & 0x80) != 0;
-            let result = (value << 1) | u8::from(carry_in);
-            (result, carry)
-        }
-        3 => {
-            let carry = (value & 0x01) != 0;
-            let result = (value >> 1) | (u8::from(carry_in) << 7);
-            (result, carry)
-        }
-        4 => {
-            let carry = (value & 0x80) != 0;
-            (value << 1, carry)
-        }
-        5 => {
-            let carry = (value & 0x01) != 0;
-            ((value >> 1) | (value & 0x80), carry)
-        }
-        6 => {
-            let result = value.rotate_left(4);
-            (result, false)
-        }
-        7 => {
-            let carry = (value & 0x01) != 0;
-            (value >> 1, carry)
-        }
+fn cb_rlc(value: u8) -> (u8, bool) {
+    let carry = (value & 0x80) != 0;
+    (value.rotate_left(1), carry)
+}
+
+/// Implements the CB-prefixed `RRC r` mnemonic.
+#[inline(always)]
+fn cb_rrc(value: u8) -> (u8, bool) {
+    let carry = (value & 0x01) != 0;
+    (value.rotate_right(1), carry)
+}
+
+/// Implements the CB-prefixed `RL r` mnemonic.
+#[inline(always)]
+fn cb_rl(value: u8, carry_in: bool) -> (u8, bool) {
+    let carry = (value & 0x80) != 0;
+    let result = (value << 1) | u8::from(carry_in);
+    (result, carry)
+}
+
+/// Implements the CB-prefixed `RR r` mnemonic.
+#[inline(always)]
+fn cb_rr(value: u8, carry_in: bool) -> (u8, bool) {
+    let carry = (value & 0x01) != 0;
+    let result = (value >> 1) | (u8::from(carry_in) << 7);
+    (result, carry)
+}
+
+/// Implements the CB-prefixed `SLA r` mnemonic.
+#[inline(always)]
+fn cb_sla(value: u8) -> (u8, bool) {
+    let carry = (value & 0x80) != 0;
+    (value << 1, carry)
+}
+
+/// Implements the CB-prefixed `SRA r` mnemonic.
+#[inline(always)]
+fn cb_sra(value: u8) -> (u8, bool) {
+    let carry = (value & 0x01) != 0;
+    ((value >> 1) | (value & 0x80), carry)
+}
+
+/// Implements the CB-prefixed `SWAP r` mnemonic.
+#[inline(always)]
+fn cb_swap(value: u8) -> (u8, bool) {
+    (value.rotate_left(4), false)
+}
+
+/// Implements the CB-prefixed `SRL r` mnemonic.
+#[inline(always)]
+fn cb_srl(value: u8) -> (u8, bool) {
+    let carry = (value & 0x01) != 0;
+    (value >> 1, carry)
+}
+
+/// Executes the CB-prefixed rotate/shift group (`RLC`..`SRL`).
+#[inline(always)]
+fn cb_exec_rotate<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, variant: u8, z: u8) -> (u32, u32) {
+    let (value, read_cycles) = read_r8(core, z);
+    let value_u8 = E::to_u8(value);
+    let carry_in = core.cpu.f.c();
+    let (result_u8, carry) = match variant {
+        0 => cb_rlc(value_u8),
+        1 => cb_rrc(value_u8),
+        2 => cb_rl(value_u8, carry_in),
+        3 => cb_rr(value_u8, carry_in),
+        4 => cb_sla(value_u8),
+        5 => cb_sra(value_u8),
+        6 => cb_swap(value_u8),
+        7 => cb_srl(value_u8),
         _ => unreachable!(),
-    }
+    };
+    let result = E::from_u8(result_u8);
+    let write_cycles = write_r8(core, z, result);
+    core.cpu.f.set_z(result_u8 == 0);
+    core.cpu.f.set_n(false);
+    core.cpu.f.set_h(false);
+    core.cpu.f.set_c(carry);
+    (read_cycles, write_cycles)
+}
+
+/// Executes the CB-prefixed `BIT b, r` mnemonics.
+#[inline(always)]
+fn cb_exec_bit<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> u32 {
+    let (value, read_cycles) = read_r8(core, z);
+    let result = E::to_u8(value);
+    let zero = result & (1 << bit) == 0;
+    core.cpu.f.set_z(zero);
+    core.cpu.f.set_n(false);
+    core.cpu.f.set_h(true);
+    read_cycles
+}
+
+/// Executes the CB-prefixed `RES b, r` mnemonics.
+#[inline(always)]
+fn cb_exec_res<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> (u32, u32) {
+    let (value, read_cycles) = read_r8(core, z);
+    let mut result = E::to_u8(value);
+    result &= !(1 << bit);
+    let write_cycles = write_r8(core, z, E::from_u8(result));
+    (read_cycles, write_cycles)
+}
+
+/// Executes the CB-prefixed `SET b, r` mnemonics.
+#[inline(always)]
+fn cb_exec_set<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> (u32, u32) {
+    let (value, read_cycles) = read_r8(core, z);
+    let mut result = E::to_u8(value);
+    result |= 1 << bit;
+    let write_cycles = write_r8(core, z, E::from_u8(result));
+    (read_cycles, write_cycles)
 }
 
 /// Executes a CB-prefixed extended opcode.
@@ -821,41 +895,19 @@ pub fn op_cb<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, sub: u8) -> u32 {
 
     match x {
         0 => {
-            let (value, read_cycles) = read_r8(core, z);
-            let value_u8 = E::to_u8(value);
-            let carry_in = core.cpu.f.c();
-            let (result_u8, carry) = cb_rot(value_u8, y, carry_in);
-            let result = E::from_u8(result_u8);
-            let write_cycles = write_r8(core, z, result);
-            core.cpu.f.set_z(result_u8 == 0);
-            core.cpu.f.set_n(false);
-            core.cpu.f.set_h(false);
-            core.cpu.f.set_c(carry);
+            let (read_cycles, write_cycles) = cb_exec_rotate(core, y, z);
             CycleCost::Clocks8.as_u32() + read_cycles + write_cycles
         }
         1 => {
-            let (value, read_cycles) = read_r8(core, z);
-            let bit = 1 << y;
-            let result = E::to_u8(value);
-            let zero = result & bit == 0;
-            core.cpu.f.set_z(zero);
-            core.cpu.f.set_n(false);
-            core.cpu.f.set_h(true);
-            // C flag preserved
+            let read_cycles = cb_exec_bit(core, y, z);
             CycleCost::Clocks8.as_u32() + read_cycles
         }
         2 => {
-            let (value, read_cycles) = read_r8(core, z);
-            let mut result = E::to_u8(value);
-            result &= !(1 << y);
-            let write_cycles = write_r8(core, z, E::from_u8(result));
+            let (read_cycles, write_cycles) = cb_exec_res(core, y, z);
             CycleCost::Clocks8.as_u32() + read_cycles + write_cycles
         }
         3 => {
-            let (value, read_cycles) = read_r8(core, z);
-            let mut result = E::to_u8(value);
-            result |= 1 << y;
-            let write_cycles = write_r8(core, z, E::from_u8(result));
+            let (read_cycles, write_cycles) = cb_exec_set(core, y, z);
             CycleCost::Clocks8.as_u32() + read_cycles + write_cycles
         }
         _ => unreachable!(),
