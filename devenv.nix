@@ -224,6 +224,12 @@ in {
   tasks."test:wasm-smoke".exec = ''
     set -euo pipefail
 
+    repo_name="$(basename "$PWD")"
+    hash_hex="$(printf "%s" "$repo_name" | sha256sum | cut -c1-8)"
+    hash_dec=$((16#$hash_hex))
+    wasm_port=$((8000 + hash_dec % 999))
+    echo "Using wasm smoke test port: ''${wasm_port}"
+
     echo "Building fabric-worker-wasm with wasm-pack..."
     devenv tasks run build:fabric-worker-wasm
 
@@ -237,22 +243,37 @@ in {
     cp web/worker.js tests/wasm/pkg/
 
     npm install --silent >/dev/null
-    bash scripts/run-browser-test.sh tests/wasm 4510 tests/wasm_browser_test.js
+    bash scripts/run-browser-test.sh tests/wasm "''${wasm_port}" tests/wasm_browser_test.js
   '';
 
   tasks."test:wasm-light".exec = ''
+    set -euo pipefail
+
+    repo_name="$(basename "$PWD")"
+    hash_hex="$(printf "%s" "$repo_name" | sha256sum | cut -c1-8)"
+    hash_dec=$((16#$hash_hex))
+    wasm_port=$((8000 + hash_dec % 999))
+    echo "Using wasm light test port: ''${wasm_port}"
+
     npm install --silent >/dev/null
-    bash scripts/run-browser-test.sh tests/wasm 4510 tests/wasm_browser_test.js
+    bash scripts/run-browser-test.sh tests/wasm "''${wasm_port}" tests/wasm_browser_test.js
   '';
 
   tasks."test:demo".exec = ''
     set -euo pipefail
 
+    repo_name="$(basename "$PWD")"
+    hash_hex="$(printf "%s" "$repo_name" | sha256sum | cut -c1-8)"
+    hash_dec=$((16#$hash_hex))
+    base_port=$((8000 + hash_dec % 999))
+    demo_port=$((base_port + 1))
+    echo "Using demo test ports: wasm=''${base_port} demo=''${demo_port}"
+
     echo "Building UI demo with wasm-pack..."
     devenv tasks run build:fabric-worker-wasm
 
     npm install --silent >/dev/null
-    bash scripts/run-browser-test.sh web 8001 tests/demo_browser_test.js
+    bash scripts/run-browser-test.sh web "''${demo_port}" tests/demo_browser_test.js
   '';
 
   # Git hooks for code quality enforcement
@@ -282,6 +303,8 @@ in {
         set -e
         devenv tasks run test:golden
         devenv tasks run test:workspace
+        devenv tasks run test:wasm-smoke
+        devenv tasks run test:demo
       ''}";
       pass_filenames = false;
       stages = ["pre-commit"];
