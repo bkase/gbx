@@ -338,7 +338,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
         let sp = E::to_u16(self.cpu.sp);
         let off = E::to_u8(offset) as i8 as i16;
         let result = sp.wrapping_add(off as u16);
-        let offset_u16 = off as i16 as u16;
+        let offset_u16 = off as u16;
         let half = ((sp ^ offset_u16 ^ result) & 0x0010) != 0;
         let carry = ((sp ^ offset_u16 ^ result) & 0x0100) != 0;
         (E::from_u16(result), half, carry)

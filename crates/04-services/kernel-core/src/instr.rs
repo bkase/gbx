@@ -715,23 +715,25 @@ pub fn op_pop_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
 }
 
 #[inline(always)]
-fn cb_rot<E: Exec>(value: u8, variant: u8, carry_in: bool) -> (u8, bool) {
+fn cb_rot(value: u8, variant: u8, carry_in: bool) -> (u8, bool) {
     match variant {
         0 => {
-            let carry = (value >> 7) != 0;
-            ((value << 1) | (value >> 7), carry)
+            let carry = (value & 0x80) != 0;
+            (value.rotate_left(1), carry)
         }
         1 => {
             let carry = (value & 0x01) != 0;
-            ((value >> 1) | (value << 7), carry)
+            (value.rotate_right(1), carry)
         }
         2 => {
-            let carry = (value >> 7) != 0;
-            (((value << 1) | u8::from(carry_in)), carry)
+            let carry = (value & 0x80) != 0;
+            let result = (value << 1) | u8::from(carry_in);
+            (result, carry)
         }
         3 => {
             let carry = (value & 0x01) != 0;
-            (((value >> 1) | (u8::from(carry_in) << 7)), carry)
+            let result = (value >> 1) | (u8::from(carry_in) << 7);
+            (result, carry)
         }
         4 => {
             let carry = (value & 0x80) != 0;
@@ -742,7 +744,7 @@ fn cb_rot<E: Exec>(value: u8, variant: u8, carry_in: bool) -> (u8, bool) {
             ((value >> 1) | (value & 0x80), carry)
         }
         6 => {
-            let result = (value >> 4) | (value << 4);
+            let result = value.rotate_left(4);
             (result, false)
         }
         7 => {
@@ -764,7 +766,7 @@ pub fn op_cb<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, sub: u8) -> u32 {
             let (value, read_cycles) = read_r8(core, z);
             let value_u8 = E::to_u8(value);
             let carry_in = core.cpu.f.c();
-            let (result_u8, carry) = cb_rot::<E>(value_u8, y, carry_in);
+            let (result_u8, carry) = cb_rot(value_u8, y, carry_in);
             let result = E::from_u8(result_u8);
             let write_cycles = write_r8(core, z, result);
             core.cpu.f.set_z(result_u8 == 0);
