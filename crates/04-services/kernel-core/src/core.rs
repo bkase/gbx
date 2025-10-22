@@ -16,7 +16,9 @@ pub enum Model {
 /// Core configuration shared across backends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoreConfig {
+    /// Width of the output frame in pixels.
     pub frame_width: u16,
+    /// Height of the output frame in pixels.
     pub frame_height: u16,
 }
 
@@ -31,10 +33,15 @@ impl Default for CoreConfig {
 
 /// Combined CPU + bus + timing core parameterised by execution backend.
 pub struct Core<E: Exec, B: Bus<E>> {
+    /// CPU register file and scheduler state.
     pub cpu: Cpu<E>,
+    /// Memory and IO bus implementation.
     pub bus: B,
+    /// Timer block shared with the scheduler.
     pub timers: Timers,
+    /// Stub PPU used for frame pacing.
     pub ppu: PpuStub,
+    /// Cycle budget accumulated within the current frame.
     pub cycles_this_frame: u32,
     config: CoreConfig,
     model: Model,

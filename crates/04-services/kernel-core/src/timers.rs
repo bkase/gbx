@@ -2,13 +2,21 @@ use crate::bus::BusScalar;
 
 /// Trait capturing the minimal IO interface used by the timers.
 pub trait TimerIo {
+    /// Reads the divider register.
     fn read_div(&self) -> u8;
+    /// Writes the divider register.
     fn write_div(&mut self, value: u8);
+    /// Reads the TIMA counter.
     fn read_tima(&self) -> u8;
+    /// Writes the TIMA counter.
     fn write_tima(&mut self, value: u8);
+    /// Reads the timer modulo.
     fn read_tma(&self) -> u8;
+    /// Reads the timer control register.
     fn read_tac(&self) -> u8;
+    /// Reads the interrupt flag register.
     fn read_if(&self) -> u8;
+    /// Writes the interrupt flag register.
     fn write_if(&mut self, value: u8);
 }
 

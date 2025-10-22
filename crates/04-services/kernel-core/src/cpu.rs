@@ -4,18 +4,31 @@ use crate::exec::{Exec, Flags};
 /// CPU register file and execution state.
 #[derive(Clone)]
 pub struct Cpu<E: Exec> {
+    /// Accumulator register.
     pub a: E::U8,
+    /// Flags register.
     pub f: Flags<E::Mask>,
+    /// `B` register.
     pub b: E::U8,
+    /// `C` register.
     pub c: E::U8,
+    /// `D` register.
     pub d: E::U8,
+    /// `E` register.
     pub e: E::U8,
+    /// `H` register.
     pub h: E::U8,
+    /// `L` register.
     pub l: E::U8,
+    /// Stack pointer.
     pub sp: E::U16,
+    /// Program counter.
     pub pc: E::U16,
+    /// Interrupt master enable flag.
     pub ime: bool,
+    /// HALT state of the CPU.
     pub halted: bool,
+    /// Pending IME enable following an `EI`.
     pub enable_ime_pending: bool,
 }
 
