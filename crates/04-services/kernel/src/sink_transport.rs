@@ -1,4 +1,4 @@
-use hub::SlotSpan;
+use service_abi::SlotSpan;
 use std::cell::RefCell;
 use std::sync::Arc;
 use transport::{SlotPoolHandle, SlotPush};

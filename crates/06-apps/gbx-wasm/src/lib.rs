@@ -15,9 +15,13 @@
 pub use fabric_worker_wasm::{fabric_worker_init, fabric_worker_run};
 
 // Test scenario worker functions (built on fabric layer)
-pub use fabric_worker_wasm::{
-    worker_register_services, worker_register_test, ScenarioStats, TestConfig,
-};
+pub use fabric_worker_wasm::{worker_register_test, ScenarioStats, TestConfig};
+
+// Service registration (GBX-specific, layer 06)
+#[cfg(target_arch = "wasm32")]
+mod worker_services;
+#[cfg(target_arch = "wasm32")]
+pub use worker_services::worker_register_services;
 
 // Re-export types for convenience
 pub use fabric_worker_wasm::{EndpointLayout, FabricLayout, PortLayout, PortRole};

@@ -119,7 +119,14 @@ mod tests {
     fn transport_services_build_smoke() {
         let services = TransportServices::new().expect("build transport services");
         let _worker = services.worker;
-        let _hub = services.hub;
+        // Build hub from individual service handles
+        let _hub = hub::ServicesHub::builder()
+            .kernel(services.kernel)
+            .fs(services.fs)
+            .gpu(services.gpu)
+            .audio(services.audio)
+            .build()
+            .expect("build services hub");
     }
 
     #[test]

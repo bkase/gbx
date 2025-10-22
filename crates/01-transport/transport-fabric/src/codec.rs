@@ -1,18 +1,29 @@
-use hub::SubmitPolicy;
 use transport::Envelope;
 
 use crate::error::FabricResult;
 
+/// Port class determines which queue type to use for message delivery.
+/// This is purely a transport-level concept with no app-level semantics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortClass {
+    /// Lossless delivery via ring buffer (blocking on full)
+    Lossless,
+    /// Best-effort delivery via ring buffer (drops on full)
+    BestEffort,
+    /// Coalescing delivery via mailbox (replaces previous value)
+    Coalesce,
+}
+
 pub struct Encoded {
-    pub policy: SubmitPolicy,
+    pub class: PortClass,
     pub envelope: Envelope,
     pub payload: Vec<u8>,
 }
 
 impl Encoded {
-    pub fn new(policy: SubmitPolicy, envelope: Envelope, payload: Vec<u8>) -> Self {
+    pub fn new(class: PortClass, envelope: Envelope, payload: Vec<u8>) -> Self {
         Self {
-            policy,
+            class,
             envelope,
             payload,
         }

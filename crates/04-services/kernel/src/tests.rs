@@ -1,7 +1,7 @@
 use super::KernelService;
-use hub::{KernelCmd, KernelRep, SubmitOutcome, TickPurpose};
 use kernel_core::ppu_stub::CYCLES_PER_FRAME;
 use kernel_core::CoreConfig;
+use service_abi::{KernelCmd, KernelRep, SubmitOutcome, TickPurpose};
 use std::sync::Arc;
 use transport::{SlotPool, SlotPoolConfig, SlotPoolHandle};
 

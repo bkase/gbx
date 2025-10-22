@@ -1,13 +1,14 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use hub::{SubmitOutcome, SubmitPolicy};
 use parking_lot::Mutex;
 use transport::{Envelope, Mailbox, MailboxSend, MsgRing};
 
+use crate::codec::PortClass;
 use crate::error::{FabricError, FabricResult};
 #[cfg(target_arch = "wasm32")]
 use crate::layout::PortLayout;
+use crate::service::SubmitOutcome;
 
 enum Backend {
     MsgRing(Mutex<MsgRing>),
@@ -15,15 +16,15 @@ enum Backend {
 }
 
 pub struct SharedPort {
-    policy: SubmitPolicy,
+    class: PortClass,
     backend: Backend,
     metrics: PortMetrics,
 }
 
 impl SharedPort {
-    pub fn new_ring(policy: SubmitPolicy, ring: MsgRing) -> Arc<Self> {
+    pub fn new_ring(class: PortClass, ring: MsgRing) -> Arc<Self> {
         Arc::new(Self {
-            policy,
+            class,
             backend: Backend::MsgRing(Mutex::new(ring)),
             metrics: PortMetrics::new(),
         })
@@ -31,7 +32,7 @@ impl SharedPort {
 
     pub fn new_mailbox(mailbox: Mailbox) -> Arc<Self> {
         Arc::new(Self {
-            policy: SubmitPolicy::Coalesce,
+            class: PortClass::Coalesce,
             backend: Backend::Mailbox(Mutex::new(mailbox)),
             metrics: PortMetrics::new(),
         })
@@ -73,21 +74,21 @@ pub struct ProducerPort {
 
 impl ProducerPort {
     pub fn try_send(&self, envelope: Envelope, payload: &[u8]) -> FabricResult<SubmitOutcome> {
-        let result = match (&self.inner.backend, self.inner.policy) {
-            (Backend::MsgRing(ring), SubmitPolicy::Lossless | SubmitPolicy::Must) => {
+        let result = match (&self.inner.backend, self.inner.class) {
+            (Backend::MsgRing(ring), PortClass::Lossless) => {
                 send_ring_lossless(&mut ring.lock(), envelope, payload)
             }
-            (Backend::MsgRing(ring), SubmitPolicy::BestEffort) => {
+            (Backend::MsgRing(ring), PortClass::BestEffort) => {
                 send_ring_besteffort(&mut ring.lock(), envelope, payload)
             }
-            (Backend::Mailbox(mailbox), SubmitPolicy::Coalesce) => {
+            (Backend::Mailbox(mailbox), PortClass::Coalesce) => {
                 send_mailbox(&mut mailbox.lock(), envelope, payload)
             }
-            (Backend::MsgRing(_), SubmitPolicy::Coalesce) => Err(FabricError::InvalidConfig(
-                "coalesce policy requires mailbox backend",
+            (Backend::MsgRing(_), PortClass::Coalesce) => Err(FabricError::InvalidConfig(
+                "coalesce class requires mailbox backend",
             )),
             (Backend::Mailbox(_), _) => Err(FabricError::InvalidConfig(
-                "mailbox backend only supports coalesce policy",
+                "mailbox backend only supports coalesce class",
             )),
         };
 
@@ -247,8 +248,8 @@ pub struct PortPair {
     pub consumer: ConsumerPort,
 }
 
-pub fn make_port_pair_ring(policy: SubmitPolicy, ring: MsgRing) -> PortPair {
-    let shared = SharedPort::new_ring(policy, ring);
+pub fn make_port_pair_ring(class: PortClass, ring: MsgRing) -> PortPair {
+    let shared = SharedPort::new_ring(class, ring);
     PortPair {
         producer: shared.producer(),
         consumer: shared.consumer(),

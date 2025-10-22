@@ -1,11 +1,11 @@
-use hub::{Service, SubmitOutcome, SubmitPolicy};
 use smallvec::SmallVec;
 use std::sync::Arc;
 use transport::SlotPoolHandle;
 
-use crate::codec::Codec;
+use crate::codec::{Codec, PortClass};
 use crate::error::{FabricError, FabricResult};
 use crate::port::{ConsumerPort, PortMetricsSnapshot, ProducerPort};
+use crate::service::{Service, SubmitOutcome};
 
 /// Handle exposed to the scheduler for submitting commands and draining reports.
 #[derive(Clone)]
@@ -21,12 +21,12 @@ pub struct EndpointHandle<C: Codec> {
 impl<C: Codec> EndpointHandle<C> {
     pub fn submit(&self, cmd: &C::Cmd) -> FabricResult<SubmitOutcome> {
         let encoded = self.codec.encode_cmd(cmd)?;
-        let port = match encoded.policy {
-            SubmitPolicy::Must | SubmitPolicy::Lossless => self.lossless.as_ref(),
-            SubmitPolicy::BestEffort => self.besteffort.as_ref(),
-            SubmitPolicy::Coalesce => self.coalesce.as_ref(),
+        let port = match encoded.class {
+            PortClass::Lossless => self.lossless.as_ref(),
+            PortClass::BestEffort => self.besteffort.as_ref(),
+            PortClass::Coalesce => self.coalesce.as_ref(),
         }
-        .ok_or(FabricError::InvalidConfig("missing port for submit policy"))?;
+        .ok_or(FabricError::InvalidConfig("missing port for port class"))?;
         port.try_send(encoded.envelope, encoded.payload.as_slice())
     }
 

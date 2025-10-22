@@ -10,12 +10,11 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hub::{SubmitOutcome, SubmitPolicy};
 use transport::schema::SCHEMA_VERSION_V1;
 use transport::Envelope;
 use transport_fabric::{
     build_service, Codec, Encoded, EndpointHandle, FabricError, FabricResult, MailboxSpec,
-    RingSpec, ServiceSpec, WorkerEndpoint, WorkerRuntime,
+    PortClass, RingSpec, ServiceSpec, SubmitOutcome, WorkerEndpoint, WorkerRuntime,
 };
 
 const CMD_TAG: u8 = 0xE1;
@@ -47,16 +46,16 @@ impl Codec for MbxCodec {
     type Rep = MbxRep;
 
     fn encode_cmd(&self, cmd: &Self::Cmd) -> FabricResult<Encoded> {
-        let (variant, value, policy) = match *cmd {
-            MbxCmd::Set(x) => (0u8, x, SubmitPolicy::Coalesce),
-            MbxCmd::SetMany(x) => (1, x, SubmitPolicy::Coalesce),
-            MbxCmd::Lossless(x) => (2, x, SubmitPolicy::Lossless),
+        let (variant, value, class) = match *cmd {
+            MbxCmd::Set(x) => (0u8, x, PortClass::Coalesce),
+            MbxCmd::SetMany(x) => (1, x, PortClass::Coalesce),
+            MbxCmd::Lossless(x) => (2, x, PortClass::Lossless),
         };
         let mut payload = Vec::with_capacity(1 + std::mem::size_of::<u32>());
         payload.push(variant);
         payload.extend_from_slice(&value.to_le_bytes());
         Ok(Encoded::new(
-            policy,
+            class,
             Envelope::new(CMD_TAG, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -86,7 +85,7 @@ impl Codec for MbxCodec {
         let mut payload = Vec::with_capacity(std::mem::size_of::<u32>());
         payload.extend_from_slice(&value.to_le_bytes());
         Ok(Encoded::new(
-            SubmitPolicy::Lossless,
+            PortClass::Lossless,
             Envelope::new(REP_TAG, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -128,7 +127,7 @@ impl Harness {
                 capacity_bytes: 1024,
                 envelope_tag: REP_TAG,
             },
-            reply_policy: SubmitPolicy::Lossless,
+            reply_policy: PortClass::Lossless,
             slot_pools: Vec::new(),
         };
         let (handle, worker_endpoint, _layout) =
