@@ -22,9 +22,13 @@ const IF_LCD_STAT: u8 = 0x02;
 
 /// Minimal IO surface required by the PPU stub.
 pub trait PpuIo {
+    /// Reads an IO register by index.
     fn read_io(&self, idx: usize) -> u8;
+    /// Writes an IO register by index.
     fn write_io(&mut self, idx: usize, value: u8);
+    /// Reads the interrupt flag register.
     fn read_if(&self) -> u8;
+    /// Writes the interrupt flag register.
     fn write_if(&mut self, value: u8);
 }
 
@@ -52,7 +56,9 @@ impl PpuIo for BusScalar {
 
 /// Read-only view over the state required for background rendering.
 pub trait PpuFrameSource {
+    /// Returns a shared reference to the IO register block.
     fn ppu_io(&self) -> &IoRegs;
+    /// Returns a shared reference to VRAM.
     fn ppu_vram(&self) -> &[u8; 0x2000];
 }
 

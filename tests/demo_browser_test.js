@@ -25,7 +25,7 @@ async function run() {
 
   try {
     await driver.get(url);
-    await driver.sleep(5000);
+    await driver.sleep(6000);
 
     const logs = await driver.manage().logs().get("browser");
     const messages = logs.map((entry) => entry.message);

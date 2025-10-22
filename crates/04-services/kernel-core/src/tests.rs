@@ -1,4 +1,4 @@
-use crate::bus::IoRegs;
+use crate::bus::{Bus, IoRegs};
 use crate::exec::Exec;
 use crate::ppu_stub::CYCLES_PER_FRAME;
 use crate::{mmu, BusScalar, Core, CoreConfig, Model, Scalar};

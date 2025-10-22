@@ -72,11 +72,17 @@ pub struct TimersState {
 /// PPU stub persisted state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PpuState {
+    /// Dot position within the active scanline.
     pub dot_in_line: u32,
+    /// Currently latched LY value.
     pub ly: u8,
+    /// Current PPU mode (0–3).
     pub mode: u8,
+    /// Cached coincidence flag state.
     pub lyc_equal: bool,
+    /// Latched frame-ready flag.
     pub frame_ready: bool,
+    /// Whether the LCD controller was previously enabled.
     pub lcd_was_on: bool,
 }
 
