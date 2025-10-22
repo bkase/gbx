@@ -2,7 +2,7 @@ use crate::bus::{Bus, BusScalar, InterruptCtrl};
 use crate::cpu::Cpu;
 use crate::exec::{Exec, Scalar};
 use crate::instr::{self, AluOp};
-use crate::ppu_stub::PpuStub;
+use crate::ppu_stub::{PpuFrameSource, PpuIo, PpuStub};
 use crate::timers::{TimerIo, Timers};
 use std::sync::Arc;
 
@@ -81,6 +81,14 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
                 self.cpu.l = E::from_u8(0x4D);
                 self.cpu.sp = E::from_u16(0xFFFE);
                 self.cpu.pc = E::from_u16(0x0100);
+
+                // PPU post-boot defaults so the LCD begins in the enabled state.
+                self.bus.write8(E::from_u16(0xFF40), E::from_u8(0x91)); // LCDC
+                self.bus.write8(E::from_u16(0xFF41), E::from_u8(0x85)); // STAT
+                self.bus.write8(E::from_u16(0xFF42), E::from_u8(0x00)); // SCY
+                self.bus.write8(E::from_u16(0xFF43), E::from_u8(0x00)); // SCX
+                self.bus.write8(E::from_u16(0xFF44), E::from_u8(0x00)); // LY
+                self.bus.write8(E::from_u16(0xFF47), E::from_u8(0xFC)); // BGP
             }
         }
     }
@@ -95,6 +103,10 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     ///
     /// The stub implementation fills a simple gradient to surface determinism.
     pub fn take_frame(&mut self, out_rgba: &mut [u8]) {
+    pub fn take_frame(&mut self, out_rgba: &mut [u8])
+    where
+        B: PpuFrameSource,
+    {
         let width = usize::from(self.config.frame_width);
         let height = usize::from(self.config.frame_height);
         let expected_len = width
@@ -108,16 +120,13 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             expected_len
         );
 
-        for y in 0..height {
-            for x in 0..width {
-                let idx = (y * width + x) * 4;
-                let shade = (((x + y) & 0xFF) as u8).saturating_add(32);
-                out_rgba[idx] = shade;
-                out_rgba[idx + 1] = shade;
-                out_rgba[idx + 2] = shade;
-                out_rgba[idx + 3] = 0xFF;
-            }
-        }
+        self.ppu.render_frame_bg(
+            self.bus.ppu_io(),
+            self.bus.ppu_vram(),
+            out_rgba,
+            self.config.frame_width,
+            self.config.frame_height,
+        );
 
         self.ppu.clear_frame_ready();
         self.cycles_this_frame = 0;
@@ -126,7 +135,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     /// Executes instructions until the cycle budget is exhausted or a frame boundary is hit.
     pub fn step_cycles(&mut self, mut budget: u32) -> u32
     where
-        B: TimerIo + InterruptCtrl,
+        B: TimerIo + InterruptCtrl + PpuIo,
     {
         if budget == 0 {
             return 0;
@@ -145,7 +154,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
 
             let step = cycles.min(budget);
             self.timers.step(step, &mut self.bus);
-            self.ppu.step(step);
+            self.ppu.step(step, &mut self.bus);
             self.cycles_this_frame = self.cycles_this_frame.wrapping_add(step);
 
             consumed = consumed.wrapping_add(step);

@@ -142,6 +142,11 @@ impl IoRegs {
     pub const LY: usize = 0x44;
     /// Scanline compare register offset.
     pub const LYC: usize = 0x45;
+    pub const BGP: usize = 0x47;
+    pub const OBP0: usize = 0x48;
+    pub const OBP1: usize = 0x49;
+    pub const WY: usize = 0x4A;
+    pub const WX: usize = 0x4B;
 
     /// Creates zeroed IO registers.
     pub fn new() -> Self {

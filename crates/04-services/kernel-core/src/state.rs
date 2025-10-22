@@ -72,10 +72,12 @@ pub struct TimersState {
 /// PPU stub persisted state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PpuState {
-    /// Cycle count carried since last frame.
-    pub cycles: u32,
-    /// Latched frame-ready flag.
+    pub dot_in_line: u32,
+    pub ly: u8,
+    pub mode: u8,
+    pub lyc_equal: bool,
     pub frame_ready: bool,
+    pub lcd_was_on: bool,
 }
 
 impl From<&Timers> for TimersState {
@@ -98,8 +100,12 @@ impl Timers {
 impl From<&PpuStub> for PpuState {
     fn from(ppu: &PpuStub) -> Self {
         Self {
-            cycles: ppu.cycles,
+            dot_in_line: ppu.dot_in_line,
+            ly: ppu.ly,
+            mode: ppu.mode,
+            lyc_equal: ppu.lyc_equal,
             frame_ready: ppu.frame_ready,
+            lcd_was_on: ppu.lcd_was_on,
         }
     }
 }
@@ -107,8 +113,12 @@ impl From<&PpuStub> for PpuState {
 impl PpuStub {
     /// Restores counters from persisted state.
     pub fn load_state(&mut self, state: &PpuState) {
-        self.cycles = state.cycles;
+        self.dot_in_line = state.dot_in_line;
+        self.ly = state.ly;
+        self.mode = state.mode;
+        self.lyc_equal = state.lyc_equal;
         self.frame_ready = state.frame_ready;
+        self.lcd_was_on = state.lcd_was_on;
     }
 }
 
