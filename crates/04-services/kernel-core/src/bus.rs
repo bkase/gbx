@@ -10,14 +10,27 @@ pub trait Bus<E: Exec> {
     fn write8(&mut self, addr: E::U16, value: E::U8);
 }
 
+/// Trait exposing interrupt enable state.
+pub trait InterruptCtrl {
+    /// Returns the interrupt enable register.
+    fn read_ie(&self) -> u8;
+}
+
 /// Scalar bus implementation backed by in-memory regions.
 pub struct BusScalar {
+    /// Entire cartridge ROM contents.
     pub rom: Arc<[u8]>,
+    /// Video RAM region used by the PPU.
     pub vram: Box<[u8; 0x2000]>,
+    /// Work RAM shared by the CPU.
     pub wram: Box<[u8; 0x2000]>,
+    /// Object attribute memory backing sprites.
     pub oam: Box<[u8; 0xA0]>,
+    /// High RAM window at `0xFF80`.
     pub hram: [u8; 0x7F],
+    /// IO register block.
     pub io: IoRegs,
+    /// Interrupt enable register at `0xFFFF`.
     pub ie: u8,
 }
 
@@ -53,6 +66,13 @@ impl Bus<Scalar> for BusScalar {
     }
 }
 
+impl InterruptCtrl for BusScalar {
+    #[inline]
+    fn read_ie(&self) -> u8 {
+        self.ie
+    }
+}
+
 /// IO register block for the scalar bus.
 #[derive(Clone)]
 pub struct IoRegs {
@@ -66,17 +86,29 @@ impl Default for IoRegs {
 }
 
 impl IoRegs {
+    /// JOYP register offset.
     pub const JOYP: usize = 0x00;
+    /// Divider register offset.
     pub const DIV: usize = 0x04;
+    /// Timer counter register offset.
     pub const TIMA: usize = 0x05;
+    /// Timer modulo register offset.
     pub const TMA: usize = 0x06;
+    /// Timer control register offset.
     pub const TAC: usize = 0x07;
+    /// Interrupt flag register offset.
     pub const IF: usize = 0x0F;
+    /// LCD control register offset.
     pub const LCDC: usize = 0x40;
+    /// LCD status register offset.
     pub const STAT: usize = 0x41;
+    /// Scroll Y register offset.
     pub const SCY: usize = 0x42;
+    /// Scroll X register offset.
     pub const SCX: usize = 0x43;
+    /// Current scanline register offset.
     pub const LY: usize = 0x44;
+    /// Scanline compare register offset.
     pub const LYC: usize = 0x45;
 
     /// Creates zeroed IO registers.
@@ -118,51 +150,61 @@ impl IoRegs {
         self.regs[Self::DIV]
     }
 
+    /// Reads the timer counter.
     #[inline]
     pub fn tima(&self) -> u8 {
         self.regs[Self::TIMA]
     }
 
+    /// Writes the timer counter.
     #[inline]
     pub fn set_tima(&mut self, value: u8) {
         self.regs[Self::TIMA] = value;
     }
 
+    /// Reads the timer modulo.
     #[inline]
     pub fn tma(&self) -> u8 {
         self.regs[Self::TMA]
     }
 
+    /// Writes the timer modulo.
     #[inline]
     pub fn set_tma(&mut self, value: u8) {
         self.regs[Self::TMA] = value;
     }
 
+    /// Reads the timer control register.
     #[inline]
     pub fn tac(&self) -> u8 {
         self.regs[Self::TAC]
     }
 
+    /// Writes the timer control register.
     #[inline]
     pub fn set_tac(&mut self, value: u8) {
         self.regs[Self::TAC] = value;
     }
 
+    /// Writes the interrupt flag register.
     #[inline]
     pub fn set_if(&mut self, value: u8) {
         self.regs[Self::IF] = value;
     }
 
+    /// Reads the interrupt flag register.
     #[inline]
     pub fn if_reg(&self) -> u8 {
         self.regs[Self::IF]
     }
 
+    /// Writes the joypad register.
     #[inline]
     pub fn set_joyp(&mut self, value: u8) {
         self.regs[Self::JOYP] = value;
     }
 
+    /// Reads the joypad register.
     #[inline]
     pub fn joyp(&self) -> u8 {
         self.regs[Self::JOYP]

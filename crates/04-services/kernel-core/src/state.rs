@@ -7,47 +7,74 @@ use crate::timers::Timers;
 /// Snapshot of a scalar core state used for determinism tests and migration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoreState {
+    /// Serialized CPU register file.
     pub regs: RegsScalar,
+    /// Copy of work RAM.
     pub wram: Vec<u8>,
+    /// Copy of video RAM.
     pub vram: Vec<u8>,
+    /// Copy of object attribute memory.
     pub oam: Vec<u8>,
+    /// Copy of high RAM.
     pub hram: Vec<u8>,
+    /// Snapshot of IO registers.
     pub io: Vec<u8>,
+    /// Interrupt enable register value.
     pub ie: u8,
+    /// Timer counters.
     pub timers: TimersState,
+    /// Persisted PPU state.
     pub ppu: PpuState,
+    /// Cycles accumulated in the current frame.
     pub cycles_this_frame: u32,
+    /// Interrupt master enable flag.
     pub ime: bool,
+    /// HALT indicator.
     pub halted: bool,
+    /// Pending IME enable flag.
     pub enable_ime_pending: bool,
 }
 
 /// Scalar register snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegsScalar {
+    /// Accumulator value.
     pub a: u8,
+    /// Flags register.
     pub f: u8,
+    /// `B` register.
     pub b: u8,
+    /// `C` register.
     pub c: u8,
+    /// `D` register.
     pub d: u8,
+    /// `E` register.
     pub e: u8,
+    /// `H` register.
     pub h: u8,
+    /// `L` register.
     pub l: u8,
+    /// Stack pointer.
     pub sp: u16,
+    /// Program counter.
     pub pc: u16,
 }
 
 /// Timer counters persisted alongside IO registers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TimersState {
+    /// Internal divider counter accumulator.
     pub div_counter: u32,
+    /// Internal TIMA counter accumulator.
     pub tima_counter: u32,
 }
 
 /// PPU stub persisted state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PpuState {
+    /// Cycle count carried since last frame.
     pub cycles: u32,
+    /// Latched frame-ready flag.
     pub frame_ready: bool,
 }
 
