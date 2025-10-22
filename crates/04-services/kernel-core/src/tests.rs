@@ -5,6 +5,7 @@ use crate::{BusScalar, Core, CoreConfig, Model, Scalar};
 use proptest::prelude::*;
 use std::sync::Arc;
 
+/// Builds a scalar core with the provided program bytes at reset address 0x0100.
 fn core_with_program(bytes: &[u8]) -> Core<Scalar, BusScalar> {
     let mut rom = vec![0u8; 0x8000];
     let start = 0x0100;
@@ -16,6 +17,7 @@ fn core_with_program(bytes: &[u8]) -> Core<Scalar, BusScalar> {
     )
 }
 
+/// Verifies `ADD A,r` updates flags according to fixture cases.
 #[test]
 fn cpu_add8_flags() {
     let cases = [
@@ -43,6 +45,7 @@ fn cpu_add8_flags() {
     }
 }
 
+/// Verifies `ADC` respects the incoming carry and sets flags correctly.
 #[test]
 fn cpu_adc8_flags() {
     let cases = [
@@ -66,6 +69,7 @@ fn cpu_adc8_flags() {
     }
 }
 
+/// Ensures `SBC` incorporates carry-in and produces expected flag values.
 #[test]
 fn cpu_sbc8_flags() {
     let cases = [
@@ -89,6 +93,7 @@ fn cpu_sbc8_flags() {
     }
 }
 
+/// Confirms logical immediates (`AND`, `OR`, `XOR`) follow flag semantics.
 #[test]
 fn cpu_immediate_logic_flags() {
     // AND
@@ -123,6 +128,7 @@ fn cpu_immediate_logic_flags() {
     assert!(!core.cpu.f.c());
 }
 
+/// Checks `CP` preserves accumulator and matches `SUB` flags.
 #[test]
 fn cpu_cp_preserves_a_and_flags_match_sub() {
     let mut core_sub = core_with_program(&[0xD6, 0x10, 0x76]); // SUB d8
@@ -144,6 +150,7 @@ fn cpu_cp_preserves_a_and_flags_match_sub() {
     );
 }
 
+/// Exercises `INC` / `DEC` on `(HL)` while ensuring carry preservation.
 #[test]
 fn inc_dec_hl_preserves_carry() {
     let mut core = core_with_program(&[0x21, 0x00, 0xC0, 0x36, 0x0F, 0x34, 0x35, 0x76]);
@@ -165,6 +172,7 @@ fn inc_dec_hl_preserves_carry() {
     );
 }
 
+/// Validates `DAA` behaviour for both addition and subtraction contexts.
 #[test]
 fn daa_adjusts_after_add_and_sub() {
     // Addition path: expect carry and zero after adjustment.
@@ -191,6 +199,7 @@ fn daa_adjusts_after_add_and_sub() {
     assert!(core.cpu.f.n());
 }
 
+/// Checks all four accumulator rotate opcodes for proper carry handling.
 #[test]
 fn rotate_a_variants() {
     // RLCA
@@ -230,6 +239,7 @@ fn rotate_a_variants() {
     assert!(core.cpu.f.c());
 }
 
+/// Ensures `ADD HL,rr` updates carry/half-carry without touching zero.
 #[test]
 fn add_hl_rr_flag_behavior() {
     let mut core = core_with_program(&[0x09, 0x76]); // ADD HL,BC; HALT
@@ -246,6 +256,7 @@ fn add_hl_rr_flag_behavior() {
     assert!(core.cpu.f.z(), "ADD HL should not touch Z");
 }
 
+/// Validates `ADD SP,e8` sets flags per hardware rules.
 #[test]
 fn add_sp_e8_flag_behavior() {
     let mut core = core_with_program(&[0xE8, 0x08, 0x76]);
@@ -259,6 +270,7 @@ fn add_sp_e8_flag_behavior() {
     assert!(core.cpu.f.c());
 }
 
+/// Ensures `LD HL,SP+e8` writes flags identically to `ADD SP,e8`.
 #[test]
 fn ld_hl_sp_plus_e8_sets_flags() {
     let mut core = core_with_program(&[0xF8, 0xF8, 0x76]);
@@ -272,6 +284,7 @@ fn ld_hl_sp_plus_e8_sets_flags() {
     assert!(core.cpu.f.c());
 }
 
+/// Confirms `PUSH/POP AF` masks lower flag bits during restore.
 #[test]
 fn push_pop_af_masks_low_bits() {
     let mut core = core_with_program(&[0x31, 0x00, 0xD0, 0xF5, 0x3E, 0xFF, 0xF1, 0x76]);
@@ -282,6 +295,7 @@ fn push_pop_af_masks_low_bits() {
     assert_eq!(core.cpu.f.to_byte(), 0xF0);
 }
 
+/// Measures cycles for taken vs. untaken `JR` conditions.
 #[test]
 fn jr_condition_cycles() {
     // Not taken (Z = 1)
@@ -301,6 +315,7 @@ fn jr_condition_cycles() {
     assert_eq!(consumed, 24);
 }
 
+/// Checks timer overflow reloads TIMA and raises the interrupt flag.
 #[test]
 fn timers_wrap() {
     let rom = vec![0x76u8; 0x8000]; // HALT-filled ROM keeps CPU idle.
@@ -324,6 +339,7 @@ fn timers_wrap() {
     );
 }
 
+/// Confirms the PPU stub signals a frame boundary after one frame of cycles.
 #[test]
 fn frame_boundary() {
     let rom = vec![0x00u8; 0x8000]; // NOP-filled ROM.
@@ -344,6 +360,7 @@ fn frame_boundary() {
     );
 }
 
+/// Verifies consecutive `EI` instructions enable IME after the second opcode.
 #[test]
 fn double_ei_sets_ime_after_second_instruction() {
     let mut core = core_with_program(&[0xFB, 0xFB, 0x76]);
@@ -373,6 +390,7 @@ fn double_ei_sets_ime_after_second_instruction() {
     );
 }
 
+/// Ensures `EI` followed by a non-EI clears the pending flag after enabling IME.
 #[test]
 fn ei_followed_by_nop_clears_pending() {
     let mut core = core_with_program(&[0xFB, 0x00, 0x76]);
@@ -395,6 +413,7 @@ fn ei_followed_by_nop_clears_pending() {
     );
 }
 
+// Property-based tests verifying ALU/carry behaviour.
 proptest! {
     #[test]
     fn prop_adc_matches_reference(a in any::<u8>(), b in any::<u8>(), carry_in in any::<bool>()) {
