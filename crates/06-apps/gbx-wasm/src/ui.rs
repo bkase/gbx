@@ -123,13 +123,16 @@ pub fn gbx_consume_frame(start_idx: u32) -> Result<JsValue, JsValue> {
             )
             .into(),
         );
-        // For now, return a placeholder since mock services don't populate slot pools
-        // This will be implemented when we wire up real frame production
+        // For now, return a placeholder since mock services don't populate slot pools.
+        // Ensure alpha is opaque so browser tests can validate the pixel buffer.
         let out = Object::new();
         Reflect::set(&out, &"width".into(), &JsValue::from_f64(160.0))?;
         Reflect::set(&out, &"height".into(), &JsValue::from_f64(144.0))?;
-        // Return empty pixels for now
-        let arr = Uint8Array::new_with_length(160 * 144 * 4);
+        let mut pixels = vec![0u8; 160 * 144 * 4];
+        for chunk in pixels.chunks_mut(4) {
+            chunk[3] = 0xFF;
+        }
+        let arr = Uint8Array::from(pixels.as_slice());
         Reflect::set(&out, &"pixels".into(), arr.as_ref())?;
         console::log_1(&"gbx_consume_frame: returning placeholder frame".into());
         Ok(out.into())

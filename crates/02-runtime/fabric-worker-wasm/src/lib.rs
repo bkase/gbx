@@ -25,24 +25,20 @@ mod wasm {
     use transport::schema::SCHEMA_VERSION_V1;
     use transport::wasm::IntoNativeLayout;
     use transport::{Envelope, Mailbox, MsgRing, SlotPool, SlotPoolHandle, SlotPush};
-    use transport_fabric::SubmitOutcome;
     use transport_fabric::{
         make_port_pair_mailbox, make_port_pair_ring, ArchivedFabricLayout, Codec, PortClass,
-        ServiceEngine, WorkerEndpoint, WorkerRuntime,
+        WorkerEndpoint, WorkerRuntime,
     };
     use transport_scenarios::{
         event_payload, FabricHandle, FrameScenarioEngine, PtrStatsSink, StatsSink,
     };
     use transport_scenarios::{EVENT_TAG, EVENT_VER};
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen::JsValue;
-    use web_sys::console;
 
     const OK: i32 = 0;
     const ERR_NULL_PTR: i32 = -1;
     const ERR_ALREADY_INIT: i32 = -2;
     const ERR_NOT_INIT: i32 = -3;
-    const ERR_BAD_LAYOUT: i32 = -4;
     const ERR_INVALID_TEST_TYPE: i32 = -5;
 
     const EVENT_ENVELOPE: Envelope = Envelope {

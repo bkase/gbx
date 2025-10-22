@@ -1,14 +1,11 @@
 //! Service registration for GBX WASM worker.
 
-use fabric_worker_wasm::{
-    build_worker_endpoint, EndpointLayouts, FABRIC_ENDPOINTS, FABRIC_RUNTIME,
-};
+use fabric_worker_wasm::{build_worker_endpoint, FABRIC_ENDPOINTS, FABRIC_RUNTIME};
 use service_abi::{Service, SubmitOutcome};
 use services_audio::AudioService;
 use services_fs::FsService;
 use services_gpu::GpuService;
 use services_kernel::KernelService;
-use smallvec::SmallVec;
 use std::cell::RefCell;
 use transport::schema::{
     TAG_AUDIO_CMD, TAG_AUDIO_REP, TAG_FS_CMD, TAG_FS_REP, TAG_GPU_CMD, TAG_GPU_REP, TAG_KERNEL_CMD,

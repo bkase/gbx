@@ -20,7 +20,7 @@ use gloo_timers::future::TimeoutFuture;
 use js_sys::{Object, Reflect};
 use rkyv::rancor::Error;
 use services_fabric::TransportServices;
-use transport::{Envelope, MsgRing, Record, SlotPoolHandle, SlotPop};
+use transport::{Envelope, MsgRing, Record, SlotPool, SlotPoolHandle, SlotPop};
 use transport_codecs::KernelCodec;
 use transport_fabric::{EndpointHandle, PortLayout, PortRole};
 use transport_scenarios::{
@@ -211,7 +211,7 @@ impl TransportHarness {
     /// Ensures all rings reconcile at the end of the test.
     #[cfg(target_arch = "wasm32")]
     pub fn assert_reconciliation(&self) -> Result<(), JsValue> {
-        self.frame_pool.with_ref(|pool| {
+        self.frame_pool.with_ref(|pool| -> Result<(), JsValue> {
             ensure!(
                 pool.free_len() == pool.slot_count(),
                 "all frame slots should be free (free={}, total={})",
@@ -219,8 +219,9 @@ impl TransportHarness {
                 pool.slot_count()
             );
             ensure!(pool.ready_len() == 0, "ready ring drained");
-        });
-        self.audio_pool.with_ref(|pool| {
+            Ok(())
+        })?;
+        self.audio_pool.with_ref(|pool| -> Result<(), JsValue> {
             ensure!(
                 pool.free_len() == pool.slot_count(),
                 "audio slots remain unused and free (free={}, total={})",
@@ -231,7 +232,8 @@ impl TransportHarness {
                 pool.ready_len() == 0,
                 "audio ready ring should remain empty"
             );
-        });
+            Ok(())
+        })?;
         ensure!(
             self.event_ring.consumer_peek().is_none(),
             "event ring should be empty after drain"
