@@ -10,6 +10,12 @@ pub trait Bus<E: Exec> {
     fn write8(&mut self, addr: E::U16, value: E::U8);
 }
 
+/// Trait exposing interrupt enable state.
+pub trait InterruptCtrl {
+    /// Returns the interrupt enable register.
+    fn read_ie(&self) -> u8;
+}
+
 /// Scalar bus implementation backed by in-memory regions.
 pub struct BusScalar {
     pub rom: Arc<[u8]>,
@@ -50,6 +56,13 @@ impl Bus<Scalar> for BusScalar {
     #[inline]
     fn write8(&mut self, addr: <Scalar as Exec>::U16, value: <Scalar as Exec>::U8) {
         mmu::write8_scalar(self, addr, value);
+    }
+}
+
+impl InterruptCtrl for BusScalar {
+    #[inline]
+    fn read_ie(&self) -> u8 {
+        self.ie
     }
 }
 
