@@ -69,7 +69,7 @@ impl PpuFrameSource for BusScalar {
 }
 
 /// Minimal PPU that models scanline timings, IO state, and interrupts.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PpuStub {
     pub(crate) dot_in_line: u32,
     pub(crate) ly: u8,
@@ -77,19 +77,6 @@ pub struct PpuStub {
     pub(crate) lyc_equal: bool,
     pub(crate) frame_ready: bool,
     pub(crate) lcd_was_on: bool,
-}
-
-impl Default for PpuStub {
-    fn default() -> Self {
-        Self {
-            dot_in_line: 0,
-            ly: 0,
-            mode: 0,
-            lyc_equal: false,
-            frame_ready: false,
-            lcd_was_on: false,
-        }
-    }
 }
 
 impl PpuStub {
@@ -388,7 +375,7 @@ fn fill_solid(out: &mut [u8], shade: u8) {
 }
 
 fn read_vram(vram: &[u8; 0x2000], addr: u16) -> u8 {
-    debug_assert!(addr >= 0x8000 && addr < 0xA000);
+    debug_assert!((0x8000..0xA000).contains(&addr));
     let idx = usize::from(addr - 0x8000);
     vram[idx]
 }

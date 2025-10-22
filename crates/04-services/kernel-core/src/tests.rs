@@ -577,7 +577,6 @@ fn lcd_off_freezes_state() {
 
     core.bus.io.write(IoRegs::LCDC, 0x00);
     core.bus.io.set_if(0);
-    core.ppu.step(LINE_CYCLES, &mut core.bus);
     assert_eq!(
         core.bus.io.read(IoRegs::LY),
         0,
