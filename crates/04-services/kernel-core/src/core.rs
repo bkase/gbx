@@ -102,7 +102,6 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     /// Renders the current frame into `out_rgba`.
     ///
     /// The stub implementation fills a simple gradient to surface determinism.
-    pub fn take_frame(&mut self, out_rgba: &mut [u8]) {
     pub fn take_frame(&mut self, out_rgba: &mut [u8])
     where
         B: PpuFrameSource,

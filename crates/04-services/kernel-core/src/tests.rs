@@ -577,6 +577,7 @@ fn lcd_off_freezes_state() {
 
     core.bus.io.write(IoRegs::LCDC, 0x00);
     core.bus.io.set_if(0);
+    core.ppu.step(LINE_CYCLES, &mut core.bus);
     assert_eq!(
         core.bus.io.read(IoRegs::LY),
         0,
@@ -610,7 +611,11 @@ fn ly_write_resets_register() {
     let mut bus = BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice()));
     bus.io.write(IoRegs::LY, 42);
     mmu::write8_scalar(&mut bus, Scalar::from_u16(0xFF44), Scalar::from_u8(0x55));
-    assert_eq!(bus.io.read(IoRegs::LY), 0, "writing LY should reset it to 0");
+    assert_eq!(
+        bus.io.read(IoRegs::LY),
+        0,
+        "writing LY should reset it to 0"
+    );
 }
 
 #[test]
@@ -682,7 +687,10 @@ fn bg_render_unsigned_tile_data() {
 
     for x in 0..8 {
         let idx = (x * 4) as usize;
-        assert_eq!(buf[idx], DMG_SHADES[1], "pixel {x} should use palette shade 1");
+        assert_eq!(
+            buf[idx], DMG_SHADES[1],
+            "pixel {x} should use palette shade 1"
+        );
         assert_eq!(buf[idx + 3], 0xFF);
     }
 }
