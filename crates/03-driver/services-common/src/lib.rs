@@ -5,7 +5,7 @@
 //! report queues reach capacity. This crate centralises the common flow so the
 //! concrete services focus on policies and report construction.
 
-use hub::{SubmitOutcome, SubmitPolicy};
+use service_abi::{SubmitOutcome, SubmitPolicy};
 use smallvec::SmallVec;
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;

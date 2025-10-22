@@ -6,7 +6,6 @@
 
 #![allow(missing_docs)]
 
-use hub::SubmitPolicy;
 use rkyv::{
     api::high::{access, to_bytes, HighSerializer, HighValidator},
     bytecheck::CheckBytes,
@@ -15,13 +14,13 @@ use rkyv::{
     util::AlignedVec,
     Archive, Serialize,
 };
-use transport::schema::*;
-use transport::Envelope;
-use transport_fabric::{Codec, Encoded, FabricError, FabricResult};
-use world::{
+use service_abi::{
     AudioCmd, AudioRep, AudioSpan, FsCmd, FsRep, GpuCmd, GpuRep, KernelCmd, KernelRep, SlotSpan,
     TickPurpose,
 };
+use transport::schema::*;
+use transport::Envelope;
+use transport_fabric::{Codec, Encoded, FabricError, FabricResult, PortClass};
 
 /// Codec for kernel service commands and reports.
 #[derive(Clone, Default)]
@@ -127,7 +126,7 @@ impl Codec for KernelCodec {
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
-            SubmitPolicy::Lossless,
+            PortClass::Lossless,
             Envelope::new(tag, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -174,7 +173,7 @@ impl Codec for FsCodec {
     type Rep = FsRep;
 
     fn encode_cmd(&self, cmd: &Self::Cmd) -> FabricResult<Encoded> {
-        let policy = SubmitPolicy::Lossless;
+        let class = PortClass::Lossless;
         let schema = match cmd {
             FsCmd::Persist { path, bytes } => FsCmdV1::Persist(FsPersistCmdV1 {
                 key: path.display().to_string(),
@@ -183,7 +182,7 @@ impl Codec for FsCodec {
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
-            policy,
+            class,
             Envelope::new(TAG_FS_CMD, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -209,7 +208,7 @@ impl Codec for FsCodec {
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
-            SubmitPolicy::Lossless,
+            PortClass::Lossless,
             Envelope::new(TAG_FS_REP, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -244,7 +243,7 @@ impl Codec for GpuCodec {
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
-            SubmitPolicy::Must,
+            PortClass::Lossless,
             Envelope::new(TAG_GPU_CMD, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -270,7 +269,7 @@ impl Codec for GpuCodec {
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
-            SubmitPolicy::Lossless,
+            PortClass::Lossless,
             Envelope::new(TAG_GPU_REP, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -304,7 +303,7 @@ impl Codec for AudioCodec {
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
-            SubmitPolicy::Must,
+            PortClass::Lossless,
             Envelope::new(TAG_AUDIO_CMD, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -329,7 +328,7 @@ impl Codec for AudioCodec {
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
-            SubmitPolicy::Lossless,
+            PortClass::Lossless,
             Envelope::new(TAG_AUDIO_REP, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -357,15 +356,15 @@ where
         .map_err(|err| FabricError::codec(format!("serialize failure: {err}")))
 }
 
-fn default_kernel_policy(cmd: &KernelCmd) -> SubmitPolicy {
+fn default_kernel_policy(cmd: &KernelCmd) -> PortClass {
     match cmd {
         KernelCmd::Tick { purpose, .. } => match purpose {
-            TickPurpose::Display => SubmitPolicy::Coalesce,
-            TickPurpose::Exploration => SubmitPolicy::BestEffort,
+            TickPurpose::Display => PortClass::Coalesce,
+            TickPurpose::Exploration => PortClass::BestEffort,
         },
-        KernelCmd::LoadRom { .. } => SubmitPolicy::Lossless,
-        KernelCmd::SetInputs { .. } => SubmitPolicy::Lossless,
-        KernelCmd::Terminate { .. } => SubmitPolicy::Lossless,
+        KernelCmd::LoadRom { .. } => PortClass::Lossless,
+        KernelCmd::SetInputs { .. } => PortClass::Lossless,
+        KernelCmd::Terminate { .. } => PortClass::Lossless,
     }
 }
 
@@ -395,11 +394,11 @@ where
 }
 
 /// Returns a default (empty) frame span placeholder.
-pub fn default_frame_span() -> world::FrameSpan {
-    world::FrameSpan::default()
+pub fn default_frame_span() -> service_abi::FrameSpan {
+    service_abi::FrameSpan::default()
 }
 
-fn encode_slot_span(span: &world::FrameSpan) -> SlotSpanV1 {
+fn encode_slot_span(span: &service_abi::FrameSpan) -> SlotSpanV1 {
     match span.slot_span.as_ref() {
         Some(slot) => SlotSpanV1 {
             start_idx: slot.start_idx,
@@ -412,7 +411,7 @@ fn encode_slot_span(span: &world::FrameSpan) -> SlotSpanV1 {
     }
 }
 
-fn frame_span_from_slot(span: &ArchivedSlotSpanV1) -> world::FrameSpan {
+fn frame_span_from_slot(span: &ArchivedSlotSpanV1) -> service_abi::FrameSpan {
     let start_idx = span.start_idx.to_native();
     let count = span.count.to_native();
     let slot_span = if count == 0 {

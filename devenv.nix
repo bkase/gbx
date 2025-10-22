@@ -175,6 +175,7 @@ in {
   tasks."lint:workspace".exec =
     ''
       devenv tasks run assets:testroms
+      python3 scripts/check-layer-deps.py
       cargo clippy --all-targets --all-features -- -D warnings -D clippy::undocumented_unsafe_blocks
     '';
   tasks."build:workspace".exec = ''

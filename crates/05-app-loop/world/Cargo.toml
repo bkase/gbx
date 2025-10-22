@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+service-abi = { path = "../../03-driver/service-abi" }
 smallvec = { workspace = true }

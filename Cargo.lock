@@ -147,16 +147,10 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 name = "fabric-worker-wasm"
 version = "0.1.0"
 dependencies = [
- "hub",
  "js-sys",
  "parking_lot",
  "rkyv",
- "services-audio",
- "services-fs",
- "services-gpu",
- "services-kernel",
  "transport",
- "transport-codecs",
  "transport-fabric",
  "transport-scenarios",
  "wasm-bindgen",
@@ -278,7 +272,13 @@ dependencies = [
  "parking_lot",
  "rkyv",
  "runtime-web-harness",
+ "service-abi",
+ "services-audio",
  "services-fabric",
+ "services-fs",
+ "services-gpu",
+ "services-kernel",
+ "smallvec",
  "transport",
  "transport-codecs",
  "transport-fabric",
@@ -370,6 +370,7 @@ name = "hub"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "service-abi",
  "smallvec",
  "world",
 ]
@@ -467,10 +468,12 @@ name = "mock"
 version = "0.1.0"
 dependencies = [
  "hub",
+ "service-abi",
  "services-audio",
  "services-fs",
  "services-gpu",
  "services-kernel",
+ "smallvec",
  "world",
 ]
 
@@ -852,10 +855,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "service-abi"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "transport-fabric",
+]
+
+[[package]]
 name = "services-audio"
 version = "0.1.0"
 dependencies = [
- "hub",
+ "service-abi",
  "services-common",
  "smallvec",
 ]
@@ -864,7 +875,7 @@ dependencies = [
 name = "services-common"
 version = "0.1.0"
 dependencies = [
- "hub",
+ "service-abi",
  "smallvec",
 ]
 
@@ -873,7 +884,7 @@ name = "services-fabric"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "hub",
+ "service-abi",
  "transport",
  "transport-codecs",
  "transport-fabric",
@@ -883,7 +894,7 @@ dependencies = [
 name = "services-fs"
 version = "0.1.0"
 dependencies = [
- "hub",
+ "service-abi",
  "services-common",
  "smallvec",
 ]
@@ -892,7 +903,7 @@ dependencies = [
 name = "services-gpu"
 version = "0.1.0"
 dependencies = [
- "hub",
+ "service-abi",
  "services-common",
  "smallvec",
 ]
@@ -901,8 +912,8 @@ dependencies = [
 name = "services-kernel"
 version = "0.1.0"
 dependencies = [
- "hub",
  "kernel-core",
+ "service-abi",
  "services-common",
  "smallvec",
  "transport",
@@ -1164,12 +1175,11 @@ dependencies = [
 name = "transport-codecs"
 version = "0.1.0"
 dependencies = [
- "hub",
  "rkyv",
+ "service-abi",
  "thiserror",
  "transport",
  "transport-fabric",
- "world",
 ]
 
 [[package]]
@@ -1177,7 +1187,6 @@ name = "transport-fabric"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "hub",
  "parking_lot",
  "proptest",
  "rkyv",
@@ -1191,7 +1200,6 @@ dependencies = [
 name = "transport-scenarios"
 version = "0.1.0"
 dependencies = [
- "hub",
  "parking_lot",
  "transport",
  "transport-fabric",
@@ -1491,6 +1499,7 @@ checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 name = "world"
 version = "0.1.0"
 dependencies = [
+ "service-abi",
  "smallvec",
 ]
 

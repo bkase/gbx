@@ -8,6 +8,8 @@ use services_audio::AudioService;
 use services_fs::FsService;
 use services_gpu::GpuService;
 use services_kernel::KernelService;
+use smallvec::SmallVec;
+use std::sync::Arc;
 
 /// Creates a mock services hub with default capacities.
 pub fn make_hub() -> ServicesHub {
@@ -28,18 +30,48 @@ pub fn make_hub_with_capacities(kernel: usize, fs: usize, gpu: usize, audio: usi
         .expect("mock hub build")
 }
 
+/// Adapter that wraps service-abi Arc services to implement hub::Service trait.
+struct HubServiceWrapper<Cmd, Rep> {
+    inner: Arc<dyn service_abi::Service<Cmd = Cmd, Rep = Rep> + Send + Sync>,
+}
+
+impl<Cmd, Rep> hub::Service for HubServiceWrapper<Cmd, Rep>
+where
+    Cmd: Send + 'static,
+    Rep: Send + 'static,
+{
+    type Cmd = Cmd;
+    type Rep = Rep;
+
+    fn try_submit(&self, cmd: &Self::Cmd) -> hub::SubmitOutcome {
+        self.inner.try_submit(cmd)
+    }
+
+    fn drain(&self, max: usize) -> SmallVec<[Self::Rep; 8]> {
+        self.inner.drain(max)
+    }
+}
+
 fn kernel_service(capacity: usize) -> KernelServiceHandle {
-    KernelService::new_handle(capacity)
+    Arc::new(HubServiceWrapper {
+        inner: KernelService::new_handle(capacity),
+    })
 }
 
 fn fs_service(capacity: usize) -> FsServiceHandle {
-    FsService::new_handle(capacity)
+    Arc::new(HubServiceWrapper {
+        inner: FsService::new_handle(capacity),
+    })
 }
 
 fn gpu_service(capacity: usize) -> GpuServiceHandle {
-    GpuService::new_handle(capacity)
+    Arc::new(HubServiceWrapper {
+        inner: GpuService::new_handle(capacity),
+    })
 }
 
 fn audio_service(capacity: usize) -> AudioServiceHandle {
-    AudioService::new_handle(capacity)
+    Arc::new(HubServiceWrapper {
+        inner: AudioService::new_handle(capacity),
+    })
 }

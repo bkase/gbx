@@ -1,8 +1,6 @@
 //! Service hub orchestration and shared scheduling primitives.
 
 use anyhow::{anyhow, Result};
-use smallvec::SmallVec;
-use std::sync::Arc;
 
 pub use world::reduce_intent::IntentReducer;
 pub use world::reduce_report::ReportReducer;
@@ -12,37 +10,15 @@ pub use world::{
     TickPurpose, WorkCmd,
 };
 
+// Re-export Service trait and handle types from service-abi
+pub use service_abi::{
+    AudioServiceHandle, FsServiceHandle, GpuServiceHandle, KernelServiceHandle, Service,
+};
+
 /// Default budget for processing intents per scheduler tick.
 pub const DEFAULT_INTENT_BUDGET: usize = 3;
 /// Default budget for draining reports per scheduler tick.
 pub const DEFAULT_REPORT_BUDGET: usize = 32;
-
-/// Non-blocking service trait implemented by backend adapters.
-pub trait Service {
-    /// Command type accepted by the service.
-    type Cmd: Send + 'static;
-    /// Report type produced by the service.
-    type Rep: Send + 'static;
-
-    /// Attempts to submit a command without blocking. Defaults to `Accepted`.
-    fn try_submit(&self, _cmd: &Self::Cmd) -> SubmitOutcome {
-        SubmitOutcome::Accepted
-    }
-
-    /// Drains up to `max` reports without blocking. Defaults to empty.
-    fn drain(&self, _max: usize) -> SmallVec<[Self::Rep; 8]> {
-        SmallVec::new()
-    }
-}
-
-/// Handle to the kernel service implementation.
-pub type KernelServiceHandle = Arc<dyn Service<Cmd = KernelCmd, Rep = KernelRep> + Send + Sync>;
-/// Handle to the filesystem service implementation.
-pub type FsServiceHandle = Arc<dyn Service<Cmd = FsCmd, Rep = FsRep> + Send + Sync>;
-/// Handle to the GPU service implementation.
-pub type GpuServiceHandle = Arc<dyn Service<Cmd = GpuCmd, Rep = GpuRep> + Send + Sync>;
-/// Handle to the audio service implementation.
-pub type AudioServiceHandle = Arc<dyn Service<Cmd = AudioCmd, Rep = AudioRep> + Send + Sync>;
 
 /// Aggregates backend services and exposes scheduling helpers.
 #[derive(Clone)]

@@ -25,7 +25,7 @@ futures = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 fabric-worker-wasm = { path = "../../02-runtime/fabric-worker-wasm" }
-runtime-web-harness = { path = "../../02-runtime/runtime-web-harness" }
+runtime-web-harness = { path = "../../06-apps/runtime-web-harness" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

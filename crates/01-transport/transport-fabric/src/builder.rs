@@ -1,8 +1,7 @@
-use hub::SubmitPolicy;
 use std::sync::Arc;
 use transport::{Envelope, Mailbox, MsgRing, SlotPool, SlotPoolConfig, SlotPoolHandle};
 
-use crate::codec::Codec;
+use crate::codec::{Codec, PortClass};
 use crate::endpoint::{EndpointHandle, WorkerEndpoint};
 use crate::error::FabricResult;
 use crate::layout::EndpointLayout;
@@ -38,7 +37,7 @@ pub struct ServiceSpec<C: Codec> {
     pub besteffort: Option<RingSpec>,
     pub coalesce: Option<MailboxSpec>,
     pub replies: RingSpec,
-    pub reply_policy: SubmitPolicy,
+    pub reply_policy: PortClass,
     pub slot_pools: Vec<SlotPoolSpec>,
 }
 
@@ -56,7 +55,7 @@ pub fn build_service<C: Codec>(
             ring_spec.capacity_bytes,
             Envelope::new(ring_spec.envelope_tag, SCHEMA_VER),
         )?;
-        let pair = make_port_pair_ring(SubmitPolicy::Lossless, ring);
+        let pair = make_port_pair_ring(PortClass::Lossless, ring);
         #[cfg(target_arch = "wasm32")]
         {
             let role = PortRole::CmdLossless;
@@ -72,7 +71,7 @@ pub fn build_service<C: Codec>(
             ring_spec.capacity_bytes,
             Envelope::new(ring_spec.envelope_tag, SCHEMA_VER),
         )?;
-        let pair = make_port_pair_ring(SubmitPolicy::BestEffort, ring);
+        let pair = make_port_pair_ring(PortClass::BestEffort, ring);
         #[cfg(target_arch = "wasm32")]
         {
             let role = PortRole::CmdBestEffort;

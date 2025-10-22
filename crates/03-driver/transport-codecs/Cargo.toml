@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 rkyv = { version = "0.8", features = ["bytecheck"] }
 thiserror = { workspace = true }
-hub = { path = "../../05-app-loop/hub" }
-transport = { path = "../transport" }
-transport-fabric = { path = "../transport-fabric" }
-world = { path = "../../05-app-loop/world" }
+service-abi = { path = "../service-abi" }
+transport = { path = "../../01-transport/transport" }
+transport-fabric = { path = "../../01-transport/transport-fabric" }

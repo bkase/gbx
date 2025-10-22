@@ -20,23 +20,15 @@ pub mod types {
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use super::types::{self, *};
-    use hub::{Service as HubService, SubmitOutcome, SubmitPolicy};
-    use services_audio::AudioService;
-    use services_fs::FsService;
-    use services_gpu::GpuService;
-    use services_kernel::KernelService;
     use std::cell::RefCell;
     use std::sync::Arc;
-    use transport::schema::{
-        SCHEMA_VERSION_V1, TAG_AUDIO_CMD, TAG_AUDIO_REP, TAG_FS_CMD, TAG_FS_REP, TAG_GPU_CMD,
-        TAG_GPU_REP, TAG_KERNEL_CMD, TAG_KERNEL_REP,
-    };
+    use transport::schema::SCHEMA_VERSION_V1;
     use transport::wasm::IntoNativeLayout;
     use transport::{Envelope, Mailbox, MsgRing, SlotPool, SlotPoolHandle, SlotPush};
-    use transport_codecs::{AudioCodec, FsCodec, GpuCodec, KernelCodec};
+    use transport_fabric::SubmitOutcome;
     use transport_fabric::{
-        make_port_pair_mailbox, make_port_pair_ring, ArchivedFabricLayout, Codec, ServiceEngine,
-        WorkerEndpoint, WorkerRuntime,
+        make_port_pair_mailbox, make_port_pair_ring, ArchivedFabricLayout, Codec, PortClass,
+        ServiceEngine, WorkerEndpoint, WorkerRuntime,
     };
     use transport_scenarios::{
         event_payload, FabricHandle, FrameScenarioEngine, PtrStatsSink, StatsSink,
@@ -60,12 +52,12 @@ mod wasm {
     };
 
     #[derive(Clone)]
-    struct EndpointLayouts {
-        lossless: Option<types::MsgRingLayout>,
-        besteffort: Option<types::MsgRingLayout>,
-        mailbox: Option<types::MailboxLayout>,
-        replies: types::MsgRingLayout,
-        slot_pools: Vec<types::SlotPoolLayout>,
+    pub struct EndpointLayouts {
+        pub lossless: Option<types::MsgRingLayout>,
+        pub besteffort: Option<types::MsgRingLayout>,
+        pub mailbox: Option<types::MailboxLayout>,
+        pub replies: types::MsgRingLayout,
+        pub slot_pools: Vec<types::SlotPoolLayout>,
     }
 
     struct WasmFabricHandle {
@@ -136,138 +128,8 @@ mod wasm {
     }
 
     thread_local! {
-        static FABRIC_ENDPOINTS: RefCell<Vec<EndpointLayouts>> = RefCell::new(Vec::new());
-        static FABRIC_RUNTIME: RefCell<Option<WorkerRuntime>> = RefCell::new(None);
-        static SERVICES_REGISTERED: RefCell<bool> = RefCell::new(false);
-    }
-
-    struct FabricServiceEngine<S, C>
-    where
-        C: Codec + Send + 'static,
-        S: HubService<Cmd = C::Cmd, Rep = C::Rep> + Send + 'static,
-    {
-        endpoint: WorkerEndpoint<C>,
-        service: S,
-        drain_budget: usize,
-        name: &'static str,
-    }
-
-    impl<S, C> FabricServiceEngine<S, C>
-    where
-        C: Codec + Send + 'static,
-        S: HubService<Cmd = C::Cmd, Rep = C::Rep> + Send + 'static,
-    {
-        fn new(endpoint: WorkerEndpoint<C>, service: S, name: &'static str) -> Self {
-            Self {
-                endpoint,
-                service,
-                drain_budget: 32,
-                name,
-            }
-        }
-    }
-
-    impl<S, C> ServiceEngine for FabricServiceEngine<S, C>
-    where
-        C: Codec + Send + 'static,
-        S: HubService<Cmd = C::Cmd, Rep = C::Rep> + Send + 'static,
-    {
-        fn poll(&mut self) -> usize {
-            let mut work = 0usize;
-            let submit_budget = self.drain_budget;
-            if let Err(err) = self.endpoint.drain_commands(submit_budget, |cmd| {
-                let outcome = self.service.try_submit(cmd);
-                if matches!(outcome, SubmitOutcome::Accepted | SubmitOutcome::Coalesced) {
-                    work += 1;
-                }
-            }) {
-                console::error_1(&JsValue::from_str(&format!(
-                    "{}: failed to drain commands: {err}",
-                    self.name
-                )));
-            }
-
-            let reports = self.service.drain(self.drain_budget);
-            for rep in reports.into_iter() {
-                match self.endpoint.publish_report(&rep) {
-                    Ok(outcome)
-                        if matches!(
-                            outcome,
-                            SubmitOutcome::Accepted | SubmitOutcome::Coalesced
-                        ) =>
-                    {
-                        work += 1;
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        console::error_1(&JsValue::from_str(&format!(
-                            "{}: failed to publish report: {err}",
-                            self.name
-                        )));
-                    }
-                }
-            }
-            work
-        }
-
-        fn name(&self) -> &'static str {
-            self.name
-        }
-    }
-
-    fn build_worker_endpoint<C>(
-        layout: &EndpointLayouts,
-        codec: C,
-        cmd_tag: u8,
-        rep_tag: u8,
-    ) -> Result<WorkerEndpoint<C>, i32>
-    where
-        C: Codec,
-    {
-        unsafe {
-            let lossless = layout.lossless.map(|ring_layout| {
-                let ring = MsgRing::from_wasm_layout(
-                    ring_layout,
-                    Envelope::new(cmd_tag, SCHEMA_VERSION_V1),
-                );
-                make_port_pair_ring(SubmitPolicy::Lossless, ring).consumer
-            });
-
-            let besteffort = layout.besteffort.map(|ring_layout| {
-                let ring = MsgRing::from_wasm_layout(
-                    ring_layout,
-                    Envelope::new(cmd_tag, SCHEMA_VERSION_V1),
-                );
-                make_port_pair_ring(SubmitPolicy::BestEffort, ring).consumer
-            });
-
-            let coalesce = layout.mailbox.map(|mailbox_layout| {
-                let mailbox = Mailbox::from_wasm_layout(
-                    mailbox_layout,
-                    Envelope::new(cmd_tag, SCHEMA_VERSION_V1),
-                );
-                make_port_pair_mailbox(mailbox).consumer
-            });
-
-            let replies_ring = MsgRing::from_wasm_layout(
-                layout.replies,
-                Envelope::new(rep_tag, SCHEMA_VERSION_V1),
-            );
-            let replies = make_port_pair_ring(SubmitPolicy::Lossless, replies_ring).producer;
-
-            let slot_pools = layout
-                .slot_pools
-                .iter()
-                .map(|pool_layout| {
-                    let pool = SlotPool::from_wasm_layout(*pool_layout);
-                    Arc::new(SlotPoolHandle::new(pool))
-                })
-                .collect();
-
-            Ok(WorkerEndpoint::new(
-                lossless, besteffort, coalesce, replies, slot_pools, codec,
-            ))
-        }
+        pub static FABRIC_ENDPOINTS: RefCell<Vec<EndpointLayouts>> = RefCell::new(Vec::new());
+        pub static FABRIC_RUNTIME: RefCell<Option<WorkerRuntime>> = RefCell::new(None);
     }
 
     #[wasm_bindgen]
@@ -308,76 +170,60 @@ mod wasm {
         }
     }
 
-    #[wasm_bindgen]
-    pub fn worker_register_services(layout_ptr: u32, layout_len: u32) -> i32 {
-        let _ = (layout_ptr, layout_len);
+    // Expose build_worker_endpoint for use by app-layer service registration
+    pub fn build_worker_endpoint<C>(
+        layout: &EndpointLayouts,
+        codec: C,
+        cmd_tag: u8,
+        rep_tag: u8,
+    ) -> Result<WorkerEndpoint<C>, i32>
+    where
+        C: Codec,
+    {
+        unsafe {
+            let lossless = layout.lossless.map(|ring_layout| {
+                let ring = MsgRing::from_wasm_layout(
+                    ring_layout,
+                    Envelope::new(cmd_tag, SCHEMA_VERSION_V1),
+                );
+                make_port_pair_ring(PortClass::Lossless, ring).consumer
+            });
 
-        if SERVICES_REGISTERED.with(|flag| *flag.borrow()) {
-            return ERR_ALREADY_INIT;
+            let besteffort = layout.besteffort.map(|ring_layout| {
+                let ring = MsgRing::from_wasm_layout(
+                    ring_layout,
+                    Envelope::new(cmd_tag, SCHEMA_VERSION_V1),
+                );
+                make_port_pair_ring(PortClass::BestEffort, ring).consumer
+            });
+
+            let coalesce = layout.mailbox.map(|mailbox_layout| {
+                let mailbox = Mailbox::from_wasm_layout(
+                    mailbox_layout,
+                    Envelope::new(cmd_tag, SCHEMA_VERSION_V1),
+                );
+                make_port_pair_mailbox(mailbox).consumer
+            });
+
+            let replies_ring = MsgRing::from_wasm_layout(
+                layout.replies,
+                Envelope::new(rep_tag, SCHEMA_VERSION_V1),
+            );
+            let replies = make_port_pair_ring(PortClass::Lossless, replies_ring).producer;
+
+            let slot_pools = layout
+                .slot_pools
+                .iter()
+                .map(|pool_layout| {
+                    let pool = SlotPool::from_wasm_layout(*pool_layout);
+                    Arc::new(SlotPoolHandle::new(pool))
+                })
+                .collect();
+
+            Ok(WorkerEndpoint::new(
+                lossless, besteffort, coalesce, replies, slot_pools, codec,
+            ))
         }
-
-        let endpoints = FABRIC_ENDPOINTS.with(|cell| cell.borrow().clone());
-        if endpoints.len() < 4 {
-            return ERR_BAD_LAYOUT;
-        }
-
-        let kernel_endpoint =
-            match build_worker_endpoint(&endpoints[0], KernelCodec, TAG_KERNEL_CMD, TAG_KERNEL_REP)
-            {
-                Ok(endpoint) => endpoint,
-                Err(code) => return code,
-            };
-        let fs_endpoint =
-            match build_worker_endpoint(&endpoints[1], FsCodec, TAG_FS_CMD, TAG_FS_REP) {
-                Ok(endpoint) => endpoint,
-                Err(code) => return code,
-            };
-        let gpu_endpoint =
-            match build_worker_endpoint(&endpoints[2], GpuCodec, TAG_GPU_CMD, TAG_GPU_REP) {
-                Ok(endpoint) => endpoint,
-                Err(code) => return code,
-            };
-        let audio_endpoint =
-            match build_worker_endpoint(&endpoints[3], AudioCodec, TAG_AUDIO_CMD, TAG_AUDIO_REP) {
-                Ok(endpoint) => endpoint,
-                Err(code) => return code,
-            };
-
-        let status = FABRIC_RUNTIME.with(move |runtime_cell| {
-            let mut guard = runtime_cell.borrow_mut();
-            let runtime = match guard.as_mut() {
-                Some(rt) => rt,
-                None => return ERR_NOT_INIT,
-            };
-
-            runtime.register(FabricServiceEngine::new(
-                kernel_endpoint,
-                KernelService::default(),
-                "kernel",
-            ));
-            runtime.register(FabricServiceEngine::new(
-                fs_endpoint,
-                FsService::default(),
-                "fs",
-            ));
-            runtime.register(FabricServiceEngine::new(
-                gpu_endpoint,
-                GpuService::default(),
-                "gpu",
-            ));
-            runtime.register(FabricServiceEngine::new(
-                audio_endpoint,
-                AudioService::default(),
-                "audio",
-            ));
-            OK
-        });
-
-        if status == OK {
-            SERVICES_REGISTERED.with(|flag| *flag.borrow_mut() = true);
-        }
-
-        status
     }
 
     #[wasm_bindgen]
@@ -390,7 +236,6 @@ mod wasm {
                     return ERR_ALREADY_INIT;
                 }
                 *runtime.borrow_mut() = Some(WorkerRuntime::new());
-                SERVICES_REGISTERED.with(|flag| *flag.borrow_mut() = false);
                 OK
             });
         }
@@ -479,7 +324,6 @@ mod wasm {
             FABRIC_RUNTIME.with(|runtime| {
                 *runtime.borrow_mut() = Some(WorkerRuntime::new());
             });
-            SERVICES_REGISTERED.with(|flag| *flag.borrow_mut() = false);
             OK
         }
     }
@@ -502,7 +346,8 @@ mod wasm {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::{
-    fabric_worker_init, fabric_worker_run, worker_register_services, worker_register_test,
+    build_worker_endpoint, fabric_worker_init, fabric_worker_run, worker_register_test,
+    EndpointLayouts, FABRIC_ENDPOINTS, FABRIC_RUNTIME,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -510,12 +355,6 @@ mod stubs {
     #[no_mangle]
     pub extern "C" fn worker_register_test(_config_ptr: u32, _stats_ptr: u32) -> i32 {
         let _ = (_config_ptr, _stats_ptr);
-        -1
-    }
-
-    #[no_mangle]
-    pub extern "C" fn worker_register_services(_layout_ptr: u32, _layout_len: u32) -> i32 {
-        let _ = (_layout_ptr, _layout_len);
         -1
     }
 

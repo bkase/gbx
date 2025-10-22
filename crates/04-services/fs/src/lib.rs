@@ -1,6 +1,6 @@
 //! Filesystem service implementation for persisting emulator data.
 
-use hub::{FsCmd, FsRep, FsServiceHandle, Service, SubmitOutcome, SubmitPolicy};
+use service_abi::{FsCmd, FsRep, FsServiceHandle, Service, SubmitOutcome, SubmitPolicy};
 use services_common::{drain_queue, try_submit_queue, LocalQueue};
 use smallvec::SmallVec;
 use std::sync::Arc;

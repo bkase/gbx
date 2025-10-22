@@ -1,6 +1,6 @@
 //! GPU service implementation for managing frame presentation.
 
-use hub::{GpuCmd, GpuRep, GpuServiceHandle, Service, SubmitOutcome, SubmitPolicy};
+use service_abi::{GpuCmd, GpuRep, GpuServiceHandle, Service, SubmitOutcome, SubmitPolicy};
 use services_common::{drain_queue, try_submit_queue, LocalQueue};
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicU64, Ordering};

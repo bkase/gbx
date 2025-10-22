@@ -6,11 +6,11 @@ mod sink_transport;
 
 use crate::instance::{AnyCore, Instance};
 use crate::sink_transport::TransportFrameSink;
-use hub::{
+use kernel_core::{BusScalar, Core, CoreConfig, Model};
+use service_abi::{
     FrameSpan, KernelCmd, KernelRep, KernelServiceHandle, Service, SubmitOutcome, SubmitPolicy,
     TickPurpose,
 };
-use kernel_core::{BusScalar, Core, CoreConfig, Model};
 use services_common::{drain_queue, try_submit_queue, LocalQueue};
 use smallvec::{smallvec, SmallVec};
 use std::cell::UnsafeCell;

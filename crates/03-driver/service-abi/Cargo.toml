@@ -1,0 +1,8 @@
+[package]
+name = "service-abi"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+smallvec = { workspace = true }
+transport-fabric = { path = "../../01-transport/transport-fabric" }

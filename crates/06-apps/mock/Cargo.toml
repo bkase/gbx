@@ -5,8 +5,10 @@ edition = "2021"
 
 [dependencies]
 hub = { path = "../../05-app-loop/hub" }
-world = { path = "../../05-app-loop/world" }
-services-kernel = { path = "../../04-services/kernel" }
-services-gpu = { path = "../../04-services/gpu" }
+service-abi = { path = "../../03-driver/service-abi" }
 services-audio = { path = "../../04-services/audio" }
 services-fs = { path = "../../04-services/fs" }
+services-gpu = { path = "../../04-services/gpu" }
+services-kernel = { path = "../../04-services/kernel" }
+smallvec = { workspace = true }
+world = { path = "../../05-app-loop/world" }

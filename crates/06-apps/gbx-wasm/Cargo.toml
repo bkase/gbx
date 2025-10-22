@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 # Core worker functionality (reusable, no app/hub dependencies)
 fabric-worker-wasm = { path = "../../02-runtime/fabric-worker-wasm" }
 transport = { path = "../../01-transport/transport" }
-transport-codecs = { path = "../../01-transport/transport-codecs" }
+transport-codecs = { path = "../../03-driver/transport-codecs" }
 transport-fabric = { path = "../../01-transport/transport-fabric" }
 parking_lot = { workspace = true }
 
@@ -19,9 +19,15 @@ app = { path = "../../05-app-loop/app" }
 hub = { path = "../../05-app-loop/hub" }
 mock = { path = "../mock" }
 world = { path = "../../05-app-loop/world" }
+service-abi = { path = "../../03-driver/service-abi" }
 services-fabric = { path = "../../03-driver/services-fabric" }
+services-kernel = { path = "../../04-services/kernel" }
+services-gpu = { path = "../../04-services/gpu" }
+services-audio = { path = "../../04-services/audio" }
+services-fs = { path = "../../04-services/fs" }
 transport-scenarios = { path = "../../01-transport/transport-scenarios" }
 gbx-frame = { path = "../../05-app-loop/gbx-frame" }
+smallvec = { workspace = true }
 
 # WASM bindings
 wasm-bindgen = "0.2.104"
@@ -29,13 +35,14 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3.81"
 futures = "0.3"
 gloo-timers = { version = "0.2", features = ["futures"] }
+web-sys = "0.3"
 
 # Serialization for transport
 bytecheck = "0.8"
 rkyv = { version = "0.8", features = ["bytecheck"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-runtime-web-harness = { path = "../../02-runtime/runtime-web-harness" }
+runtime-web-harness = { path = "../runtime-web-harness" }
 web-sys = { version = "0.3", features = [
   "Blob",
   "BlobPropertyBag",

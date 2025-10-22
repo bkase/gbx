@@ -3,10 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use hub::{
-    AudioServiceHandle, FsServiceHandle, GpuServiceHandle, KernelServiceHandle, ServicesHub,
-    ServicesHubBuilder, SubmitPolicy,
-};
+use service_abi::{AudioServiceHandle, FsServiceHandle, GpuServiceHandle, KernelServiceHandle};
 use transport::schema::{
     TAG_AUDIO_CMD, TAG_AUDIO_REP, TAG_FS_CMD, TAG_FS_REP, TAG_GPU_CMD, TAG_GPU_REP, TAG_KERNEL_CMD,
     TAG_KERNEL_REP,
@@ -14,13 +11,16 @@ use transport::schema::{
 use transport::SlotPoolConfig;
 use transport_codecs::{AudioCodec, FsCodec, GpuCodec, KernelCodec};
 use transport_fabric::{
-    build_service, EndpointHandle, FabricLayout, MailboxSpec, RingSpec, ServiceAdapter,
+    build_service, EndpointHandle, FabricLayout, MailboxSpec, PortClass, RingSpec, ServiceAdapter,
     ServiceSpec, SlotPoolSpec, WorkerEndpoint,
 };
 
-/// Aggregates transport-backed service adapters alongside the worker topology.
+/// Aggregates transport-backed service endpoints and worker topology.
 pub struct TransportServices {
-    pub hub: ServicesHub,
+    pub kernel: KernelServiceHandle,
+    pub fs: FsServiceHandle,
+    pub gpu: GpuServiceHandle,
+    pub audio: AudioServiceHandle,
     pub worker: WorkerTopology,
     pub scheduler: SchedulerTopology,
 }
@@ -64,7 +64,7 @@ impl TransportServices {
                 capacity_bytes: 512 * 1024,
                 envelope_tag: TAG_KERNEL_REP,
             },
-            reply_policy: SubmitPolicy::Lossless,
+            reply_policy: PortClass::Lossless,
             slot_pools: vec![
                 // Frame pool (index 0)
                 SlotPoolSpec {
@@ -98,7 +98,7 @@ impl TransportServices {
                 capacity_bytes: 64 * 1024,
                 envelope_tag: TAG_FS_REP,
             },
-            reply_policy: SubmitPolicy::Lossless,
+            reply_policy: PortClass::Lossless,
             slot_pools: vec![],
         };
         let (fs_endpoint, fs_worker, _fs_layout) = build_service(fs_spec)?;
@@ -117,7 +117,7 @@ impl TransportServices {
                 capacity_bytes: 64 * 1024,
                 envelope_tag: TAG_GPU_REP,
             },
-            reply_policy: SubmitPolicy::Lossless,
+            reply_policy: PortClass::Lossless,
             slot_pools: vec![],
         };
         let (gpu_endpoint, gpu_worker, _gpu_layout) = build_service(gpu_spec)?;
@@ -136,7 +136,7 @@ impl TransportServices {
                 capacity_bytes: 32 * 1024,
                 envelope_tag: TAG_AUDIO_REP,
             },
-            reply_policy: SubmitPolicy::Lossless,
+            reply_policy: PortClass::Lossless,
             slot_pools: vec![],
         };
         let (audio_endpoint, audio_worker, _audio_layout) = build_service(audio_spec)?;
@@ -151,41 +151,20 @@ impl TransportServices {
             layout,
         };
 
-        let hub = ServicesHubBuilder::new()
-            .kernel(kernel_handle(kernel_endpoint.clone()))
-            .fs(fs_handle(fs_endpoint.clone()))
-            .gpu(gpu_handle(gpu_endpoint.clone()))
-            .audio(audio_handle(audio_endpoint.clone()))
-            .build()
-            .expect("transport services hub build");
-
         let scheduler = SchedulerTopology {
-            kernel: kernel_endpoint,
-            fs: fs_endpoint,
-            gpu: gpu_endpoint,
-            audio: audio_endpoint,
+            kernel: kernel_endpoint.clone(),
+            fs: fs_endpoint.clone(),
+            gpu: gpu_endpoint.clone(),
+            audio: audio_endpoint.clone(),
         };
 
         Ok(Self {
-            hub,
+            kernel: Arc::new(ServiceAdapter::new(kernel_endpoint)) as KernelServiceHandle,
+            fs: Arc::new(ServiceAdapter::new(fs_endpoint)) as FsServiceHandle,
+            gpu: Arc::new(ServiceAdapter::new(gpu_endpoint)) as GpuServiceHandle,
+            audio: Arc::new(ServiceAdapter::new(audio_endpoint)) as AudioServiceHandle,
             worker,
             scheduler,
         })
     }
-}
-
-fn kernel_handle(endpoint: EndpointHandle<KernelCodec>) -> KernelServiceHandle {
-    Arc::new(ServiceAdapter::new(endpoint)) as KernelServiceHandle
-}
-
-fn fs_handle(endpoint: EndpointHandle<FsCodec>) -> FsServiceHandle {
-    Arc::new(ServiceAdapter::new(endpoint)) as FsServiceHandle
-}
-
-fn gpu_handle(endpoint: EndpointHandle<GpuCodec>) -> GpuServiceHandle {
-    Arc::new(ServiceAdapter::new(endpoint)) as GpuServiceHandle
-}
-
-fn audio_handle(endpoint: EndpointHandle<AudioCodec>) -> AudioServiceHandle {
-    Arc::new(ServiceAdapter::new(endpoint)) as AudioServiceHandle
 }
