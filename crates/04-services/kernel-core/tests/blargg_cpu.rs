@@ -110,6 +110,11 @@ fn blargg_cpu_instrs_passes() {
 }
 
 #[test]
+fn blargg_cpu_instrs_01_special_passes() {
+    assert_serial_passes_within("blargg/cpu_instrs/individual/01-special.gb", 40_000_000);
+}
+
+#[test]
 fn blargg_cpu_instrs_02_interrupts_passes() {
     assert_serial_passes_within("blargg/cpu_instrs/individual/02-interrupts.gb", 60_000_000);
 }

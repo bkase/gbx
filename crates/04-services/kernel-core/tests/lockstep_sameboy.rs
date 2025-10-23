@@ -776,6 +776,11 @@ fn lockstep_reports_divergence_on_interrupts_rom() {
 }
 
 #[test]
+fn lockstep_cpu_instrs_01_special() -> Result<()> {
+    run_lockstep("blargg/cpu_instrs/individual/01-special.gb", 150_000)
+}
+
+#[test]
 #[ignore = "Fails until kernel-core matches SameBoy on interrupts timing"]
 fn lockstep_cpu_instrs_02_interrupts() -> Result<()> {
     run_lockstep("blargg/cpu_instrs/individual/02-interrupts.gb", 200_000)
