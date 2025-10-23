@@ -788,7 +788,6 @@ fn lockstep_cpu_instrs_03_op_sp_hl() -> Result<()> {
 }
 
 #[test]
-#[ignore = "Pending opcode fixes before this ROM matches SameBoy"]
 fn lockstep_cpu_instrs_04_op_r_imm() -> Result<()> {
     run_lockstep("blargg/cpu_instrs/individual/04-op r,imm.gb", 150_000)
 }
