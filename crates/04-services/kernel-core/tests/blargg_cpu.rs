@@ -128,3 +128,21 @@ fn blargg_cpu_instrs_03_op_sp_hl_passes() {
 fn blargg_cpu_instrs_04_op_r_imm_passes() {
     assert_serial_passes_within("blargg/cpu_instrs/individual/04-op r,imm.gb", 40_000_000);
 }
+
+#[test]
+fn blargg_cpu_instrs_05_op_rp_passes() {
+    assert_serial_passes_within("blargg/cpu_instrs/individual/05-op rp.gb", 40_000_000);
+}
+
+#[test]
+fn blargg_cpu_instrs_06_ld_r_r_passes() {
+    assert_serial_passes_within("blargg/cpu_instrs/individual/06-ld r,r.gb", 40_000_000);
+}
+
+#[test]
+fn blargg_cpu_instrs_07_jr_jp_call_ret_rst_passes() {
+    assert_serial_passes_within(
+        "blargg/cpu_instrs/individual/07-jr,jp,call,ret,rst.gb",
+        60_000_000,
+    );
+}
