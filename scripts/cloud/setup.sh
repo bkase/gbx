@@ -59,7 +59,7 @@ persist_env() {
 apt_install_basics() {
   if have apt-get; then
     maybe_sudo apt-get update -y
-    maybe_sudo apt-get install -y curl unzip ca-certificates python3 git gnupg
+    maybe_sudo apt-get install -y curl unzip ca-certificates python3 git gnupg xz-utils
     maybe_sudo apt-get install -y chromium || true
     if ! have chromium && ! have chromium-browser && ! have google-chrome; then
       note "Installing Google Chrome (fallback)"
