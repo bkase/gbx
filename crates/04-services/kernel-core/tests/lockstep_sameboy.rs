@@ -186,6 +186,10 @@ impl SameBoyOracle {
             }
         }
 
+        // Disable the boot ROM overlay to mirror the post-boot cartridge mapping
+        // used by our core.
+        gb.write_memory(0xFF50, 0x01);
+
         Ok(Self {
             gb,
             history: VecDeque::with_capacity(HISTORY_LEN),
@@ -279,6 +283,19 @@ fn run_lockstep(path: &str, max_steps: usize) -> Result<()> {
     let mut ours = OurCore::new(Arc::clone(&rom));
     let mut oracle = SameBoyOracle::new(rom.as_ref())
         .with_context(|| format!("failed to initialise SameBoy oracle for {path}"))?;
+    if std::env::var_os("GBX_TRACE_TIMA").is_some() {
+        eprintln!("ROM[0x50]={:02X}", rom[0x50]);
+        eprintln!("SameBoy ROM[0x50]={:02X}", oracle.safe_read(0x0050));
+        for addr in 0x0040..0x0060 {
+            eprint!("{:02X} ", oracle.safe_read(addr));
+        }
+        eprintln!();
+        eprintln!(
+            "DIV ours={:02X} ref={:02X}",
+            ours.read8(0xFF04),
+            oracle.safe_read(0xFF04)
+        );
+    }
     let trace_pc = std::env::var("GBX_TRACE_PC")
         .ok()
         .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok());
@@ -342,6 +359,37 @@ fn run_lockstep(path: &str, max_steps: usize) -> Result<()> {
 
         ours_snap = ours.snapshot();
         oracle_snap = oracle_post;
+
+        if std::env::var_os("GBX_TRACE_TIMA").is_some() {
+            let ours_tima = ours.read8(0xFF05);
+            let ref_tima = oracle.safe_read(0xFF05);
+            if ours_tima != ref_tima {
+                let (div_counter, timer_input, reloading, state_code) =
+                    ours.core.timers.debug_state();
+                let ref_div = oracle.safe_read(0xFF04);
+                let ref_div = u16::from(ref_div);
+                let ref_div_full = (ref_div << 8) as u16;
+                let phase_delta = div_counter.wrapping_sub(ref_div_full);
+                eprintln!(
+                    "TIMA mismatch step {} ours={:02X} ref={:02X} div={:04X} ref_div={:02X} phase_delta={:04X} timer_input={} reloading={} tima_state={}",
+                    step + 1,
+                    ours_tima,
+                    ref_tima,
+                    div_counter,
+                    ref_div,
+                    phase_delta,
+                    timer_input,
+                    reloading,
+                    state_code,
+                );
+                eprintln!(
+                    "IF ours={:02X} ref={:02X}",
+                    ours.read8(0xFF0F),
+                    oracle.safe_read(0xFF0F)
+                );
+            }
+        }
+
         if single_step_arm {
             if let Some(bp) = break_pc {
                 if oracle_snap.pc == bp {
@@ -415,6 +463,9 @@ fn align_io_registers(ours: &mut OurCore, oracle: &mut SameBoyOracle) {
         let value = oracle.safe_read(addr);
         if idx == IoRegs::IF {
             ours.core.bus.io.set_if(value);
+        } else if idx == IoRegs::DIV {
+            ours.core.timers.sync_div_from_high_byte(value);
+            ours.core.bus.io.write(idx, value);
         } else {
             ours.core.bus.io.write(idx, value);
         }
@@ -552,6 +603,26 @@ fn dump_divergence(
          | serial_counter={serial_counter} active={serial_active} \
          bits_remaining={serial_bits_remaining} transfers={serial_transfers}"
     );
+
+    if std::env::var_os("GBX_TRACE_TIMA").is_some() {
+        let ours_tima = ours.read8(0xFF05);
+        let ours_tma = ours.read8(0xFF06);
+        let ours_tac = ours.read8(0xFF07);
+        let ref_tima = oracle.safe_read(0xFF05);
+        let ref_tma = oracle.safe_read(0xFF06);
+        let ref_tac = oracle.safe_read(0xFF07);
+        eprintln!(
+            "TIMA ours={ours_tima:02X} ref={ref_tima:02X} | TMA ours={ours_tma:02X} ref={ref_tma:02X} | TAC ours={ours_tac:02X} ref={ref_tac:02X}"
+        );
+        let ours_div = ours.read8(0xFF04);
+        let ref_div = oracle.safe_read(0xFF04);
+        eprintln!("DIV ours={ours_div:02X} ref={ref_div:02X}");
+
+        eprintln!(
+            "HALT bug ours={} halted={} ime={} | ref ime not tracked",
+            ours.core.cpu.halt_bug, ours.core.cpu.halted, ours.core.cpu.ime
+        );
+    }
 
     let ours_ff90 = ours.read8(0xFF90);
     let ref_ff90 = oracle.safe_read(0xFF90);

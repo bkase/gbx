@@ -64,7 +64,10 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     }
 
     /// Resets CPU and peripheral state to post-boot defaults.
-    pub fn reset_post_boot(&mut self, model: Model) {
+    pub fn reset_post_boot(&mut self, model: Model)
+    where
+        B: TimerIo,
+    {
         self.model = model;
         self.cpu = Cpu::new();
         self.timers.reset();
@@ -92,6 +95,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
                 self.bus.write8(E::from_u16(0xFF43), E::from_u8(0x00)); // SCX
                 self.bus.write8(E::from_u16(0xFF44), E::from_u8(0x00)); // LY
                 self.bus.write8(E::from_u16(0xFF47), E::from_u8(0xFC)); // BGP
+                self.timers.initialize_post_boot(&mut self.bus);
             }
         }
     }
@@ -183,7 +187,10 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
         consumed
     }
 
-    fn execute_opcode(&mut self) -> u32 {
+    fn execute_opcode(&mut self) -> u32
+    where
+        B: TimerIo + InterruptCtrl,
+    {
         let pending_before = self.cpu.enable_ime_pending;
         let opcode = self.cpu.fetch8(&mut self.bus);
         let opcode_u8 = E::to_u8(opcode);

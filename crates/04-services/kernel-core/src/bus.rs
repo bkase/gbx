@@ -60,6 +60,14 @@ pub struct BusScalar {
     pub joyp_buttons: u8,
     /// Latched d-pad inputs (Right, Left, Up, Down), active-low.
     pub joyp_dpad: u8,
+    /// Tracks whether DIV was written since the last timer step.
+    pub timer_div_reset: bool,
+    /// Captures the most recent TIMA write until timers acknowledge it.
+    pub timer_tima_write: Option<u8>,
+    /// Captures the most recent TMA write until timers acknowledge it.
+    pub timer_tma_write: Option<u8>,
+    /// Captures the most recent TAC write (old, new) until timers acknowledge it.
+    pub timer_tac_write: Option<(u8, u8)>,
 }
 
 impl BusScalar {
@@ -84,6 +92,10 @@ impl BusScalar {
             joyp_select: 0x30,
             joyp_buttons: 0x0F,
             joyp_dpad: 0x0F,
+            timer_div_reset: false,
+            timer_tima_write: None,
+            timer_tma_write: None,
+            timer_tac_write: None,
         }
     }
 
@@ -95,6 +107,10 @@ impl BusScalar {
         self.joyp_select = 0x30;
         self.joyp_buttons = 0x0F;
         self.joyp_dpad = 0x0F;
+        self.timer_div_reset = false;
+        self.timer_tima_write = None;
+        self.timer_tma_write = None;
+        self.timer_tac_write = None;
     }
 
     /// Returns the accumulated serial log as a string and clears the buffer.
@@ -319,10 +335,10 @@ impl IoRegs {
     /// Reads an IO register.
     #[inline]
     pub fn read(&self, idx: usize) -> u8 {
-        if idx == Self::SC {
-            self.sc()
-        } else {
-            self.regs[idx]
+        match idx {
+            Self::SC => self.sc(),
+            Self::TAC => self.tac(),
+            _ => self.regs[idx],
         }
     }
 
@@ -375,7 +391,7 @@ impl IoRegs {
     /// Reads the timer control register.
     #[inline]
     pub fn tac(&self) -> u8 {
-        self.regs[Self::TAC]
+        self.regs[Self::TAC] | 0xF8
     }
 
     /// Writes the timer control register.

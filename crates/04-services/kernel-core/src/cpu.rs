@@ -30,6 +30,8 @@ pub struct Cpu<E: Exec> {
     pub halted: bool,
     /// Pending IME enable following an `EI`.
     pub enable_ime_pending: bool,
+    /// Indicates the HALT bug should adjust the next opcode fetch.
+    pub halt_bug: bool,
 }
 
 impl<E: Exec> Default for Cpu<E> {
@@ -59,6 +61,7 @@ impl<E: Exec> Cpu<E> {
             ime: false,
             halted: false,
             enable_ime_pending: false,
+            halt_bug: false,
         }
     }
 
@@ -124,6 +127,10 @@ impl<E: Exec> Cpu<E> {
         let byte = bus.read8(pc);
         let next = E::from_u16(E::to_u16(pc).wrapping_add(1));
         self.pc = next;
+        if self.halt_bug {
+            self.halt_bug = false;
+            self.pc = E::from_u16(E::to_u16(self.pc).wrapping_sub(1));
+        }
         byte
     }
 

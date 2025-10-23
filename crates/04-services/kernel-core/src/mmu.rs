@@ -82,6 +82,18 @@ pub fn write8_scalar(
             }
             if idx == BusScalar::io_div_index() {
                 bus.io.set_div(0);
+                bus.timer_div_reset = true;
+            } else if idx == IoRegs::TIMA {
+                bus.io.set_tima(value);
+                bus.timer_tima_write = Some(value);
+            } else if idx == IoRegs::TMA {
+                bus.io.set_tma(value);
+                bus.timer_tma_write = Some(value);
+            } else if idx == IoRegs::TAC {
+                let masked = value & 0x07;
+                let previous = bus.io.tac();
+                bus.io.set_tac(masked);
+                bus.timer_tac_write = Some((previous, masked));
             } else if idx == BusScalar::io_ly_index() {
                 bus.io.write(idx, 0);
             } else {

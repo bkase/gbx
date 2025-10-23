@@ -5,9 +5,10 @@
 //! helper routines to keep that match manageable while preserving a scalar-friendly
 //! control flow.
 
-use crate::bus::Bus;
+use crate::bus::{Bus, InterruptCtrl};
 use crate::core::Core;
 use crate::exec::{Exec, Flags};
+use crate::timers::TimerIo;
 /// Execution cost for common instruction classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CycleCost {
@@ -731,8 +732,19 @@ pub fn op_ei<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Enters the HALT low-power state.
 #[inline(always)]
-pub fn op_halt<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    core.cpu.halted = true;
+pub fn op_halt<E: Exec, B>(core: &mut Core<E, B>) -> u32
+where
+    B: Bus<E> + InterruptCtrl + TimerIo,
+{
+    let ie = core.bus.read_ie();
+    let if_reg = core.bus.read_if();
+    let pending = ie & if_reg & 0x1F;
+
+    if core.cpu.ime || pending == 0 {
+        core.cpu.halted = true;
+    } else {
+        core.cpu.halt_bug = true;
+    }
     CycleCost::Clocks4.as_u32()
 }
 

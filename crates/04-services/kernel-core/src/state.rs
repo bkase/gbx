@@ -2,7 +2,7 @@ use crate::bus::BusScalar;
 use crate::core::Core;
 use crate::exec::{Exec, Scalar};
 use crate::ppu_stub::PpuStub;
-use crate::timers::Timers;
+use crate::timers::{TimaState, Timers};
 
 /// Snapshot of a scalar core state used for determinism tests and migration.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +33,8 @@ pub struct CoreState {
     pub halted: bool,
     /// Pending IME enable flag.
     pub enable_ime_pending: bool,
+    /// Pending HALT bug adjustment flag.
+    pub halt_bug: bool,
 }
 
 /// Scalar register snapshot.
@@ -64,9 +66,11 @@ pub struct RegsScalar {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TimersState {
     /// Internal divider counter accumulator.
-    pub div_counter: u32,
-    /// Internal TIMA counter accumulator.
-    pub tima_counter: u32,
+    pub div_counter: u16,
+    /// Latched timer input signal level.
+    pub timer_input: bool,
+    /// Serialized TIMA state machine.
+    pub tima_state: u8,
 }
 
 /// PPU stub persisted state.
@@ -90,7 +94,12 @@ impl From<&Timers> for TimersState {
     fn from(t: &Timers) -> Self {
         Self {
             div_counter: t.div_counter,
-            tima_counter: t.tima_counter,
+            timer_input: t.timer_input,
+            tima_state: match t.tima_state {
+                TimaState::Running => 0,
+                TimaState::Reloading => 1,
+                TimaState::Reloaded => 2,
+            },
         }
     }
 }
@@ -99,7 +108,12 @@ impl Timers {
     /// Restores timer counters from a persisted state.
     pub fn load_state(&mut self, state: &TimersState) {
         self.div_counter = state.div_counter;
-        self.tima_counter = state.tima_counter;
+        self.timer_input = state.timer_input;
+        self.tima_state = match state.tima_state {
+            1 => TimaState::Reloading,
+            2 => TimaState::Reloaded,
+            _ => TimaState::Running,
+        };
     }
 }
 
@@ -156,6 +170,7 @@ impl From<&Core<Scalar, BusScalar>> for CoreState {
             ime: cpu.ime,
             halted: cpu.halted,
             enable_ime_pending: cpu.enable_ime_pending,
+            halt_bug: cpu.halt_bug,
         }
     }
 }
@@ -176,6 +191,7 @@ impl Core<Scalar, BusScalar> {
         self.cpu.ime = state.ime;
         self.cpu.halted = state.halted;
         self.cpu.enable_ime_pending = state.enable_ime_pending;
+        self.cpu.halt_bug = state.halt_bug;
 
         self.bus.wram.copy_from_slice(&state.wram);
         self.bus.vram.copy_from_slice(&state.vram);
