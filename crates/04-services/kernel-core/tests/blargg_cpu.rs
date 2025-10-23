@@ -146,3 +146,24 @@ fn blargg_cpu_instrs_07_jr_jp_call_ret_rst_passes() {
         60_000_000,
     );
 }
+
+#[test]
+fn blargg_cpu_instrs_08_misc_instrs_passes() {
+    assert_serial_passes_within("blargg/cpu_instrs/individual/08-misc instrs.gb", 60_000_000);
+}
+
+#[test]
+fn blargg_cpu_instrs_09_op_r_r_passes() {
+    assert_serial_passes_within("blargg/cpu_instrs/individual/09-op r,r.gb", 40_000_000);
+}
+
+#[test]
+fn blargg_cpu_instrs_10_bit_ops_passes() {
+    assert_serial_passes_within("blargg/cpu_instrs/individual/10-bit ops.gb", 60_000_000);
+}
+
+#[test]
+#[ignore = "ROM still halts before reporting Passed over serial"]
+fn blargg_cpu_instrs_11_op_a_hl_passes() {
+    assert_serial_passes_within("blargg/cpu_instrs/individual/11-op a,(hl).gb", 60_000_000);
+}

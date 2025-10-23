@@ -814,3 +814,23 @@ fn lockstep_cpu_instrs_07_jr_jp_call_ret_rst() -> Result<()> {
         200_000,
     )
 }
+
+#[test]
+fn lockstep_cpu_instrs_08_misc_instrs() -> Result<()> {
+    run_lockstep("blargg/cpu_instrs/individual/08-misc instrs.gb", 200_000)
+}
+
+#[test]
+fn lockstep_cpu_instrs_09_op_r_r() -> Result<()> {
+    run_lockstep("blargg/cpu_instrs/individual/09-op r,r.gb", 150_000)
+}
+
+#[test]
+fn lockstep_cpu_instrs_10_bit_ops() -> Result<()> {
+    run_lockstep("blargg/cpu_instrs/individual/10-bit ops.gb", 200_000)
+}
+
+#[test]
+fn lockstep_cpu_instrs_11_op_a_hl() -> Result<()> {
+    run_lockstep("blargg/cpu_instrs/individual/11-op a,(hl).gb", 200_000)
+}
