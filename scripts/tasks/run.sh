@@ -102,11 +102,13 @@ build_workspace() {
 }
 
 build_wasm_app() {
+  assets_testroms
   export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"
   with_rustup_toolchain cargo build --target wasm32-unknown-unknown -p app
 }
 
 build_fabric_worker_wasm() {
+  assets_testroms
   export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"
   local cargo_cmd
   cargo_cmd="$(command -v cargo)"
