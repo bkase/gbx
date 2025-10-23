@@ -86,10 +86,6 @@ install_rust() {
   rustup toolchain install "$RUST_TOOLCHAIN" -c rustc -c cargo -c rustfmt -c clippy -c rust-src -c rust-analyzer
   rustup override set "$RUST_TOOLCHAIN"
   rustup target add wasm32-unknown-unknown --toolchain "$RUST_TOOLCHAIN"
-
-  cargo install --locked wasm-pack || true
-  cargo install --locked cargo-nextest || true
-  cargo install --locked wasm-tools || true
 }
 
 install_wasm_pack_binary() {
@@ -142,9 +138,25 @@ install_nextest_binary() {
 }
 
 ensure_cli_tools() {
-  install_wasm_pack_binary || cargo install --locked wasm-pack || true
-  install_nextest_binary || cargo install --locked cargo-nextest || true
-  cargo install --locked wasm-tools || true
+  install_wasm_pack_binary || {
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    CARGO_TARGET_DIR="$tmp_dir" cargo install --locked wasm-pack || true
+    rm -rf "$tmp_dir"
+  }
+  install_nextest_binary || {
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    CARGO_TARGET_DIR="$tmp_dir" cargo install --locked cargo-nextest || true
+    rm -rf "$tmp_dir"
+  }
+  {
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    CARGO_TARGET_DIR="$tmp_dir" cargo install --locked wasm-tools || true
+    rm -rf "$tmp_dir"
+  }
+  rm -rf "$HOME/.cargo/registry/index" "$HOME/.cargo/registry/cache" "$HOME/.cargo/git"
 }
 
 npm_bootstrap() {
