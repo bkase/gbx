@@ -1,12 +1,16 @@
 //! Blargg Game Boy CPU instruction acceptance tests executed against the scalar core.
 
-use kernel_core::{Core, Scalar};
+use kernel_core::{Core, Exec, Scalar};
 use testdata::{self, Expected};
 
 const STEP_BUDGET: u32 = 1_000_000;
 const MAX_CYCLES: u64 = 150_000_000;
 
 fn run_serial_rom(path: &str, max_cycles: u64) -> (String, u64) {
+    let max_cycles = std::env::var("GBX_SERIAL_MAX_CYCLES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(max_cycles);
     let rom = testdata::bytes(path);
     let mut core: Core<Scalar, _> = Core::from_rom(rom);
     let mut serial = String::new();
@@ -33,6 +37,30 @@ fn run_serial_rom(path: &str, max_cycles: u64) -> (String, u64) {
     let tail = core.bus.take_serial();
     if !tail.is_empty() {
         serial.push_str(&tail);
+    }
+
+    if std::env::var_os("GBX_DUMP_SERIAL_STATE").is_some() {
+        let cpu = &core.cpu;
+        eprintln!(
+            "GBX_DUMP_SERIAL_STATE: cycles={} status={} pc={:#06X} a={:02X} f={:02X} bc={:#06X} de={:#06X} hl={:#06X} sp={:#06X} ime={} halted={}",
+            elapsed,
+            if serial.contains("Passed") {
+                "passed"
+            } else if serial.contains("Failed") {
+                "failed"
+            } else {
+                "in-progress"
+            },
+            Scalar::to_u16(cpu.pc),
+            Scalar::to_u8(cpu.a),
+            cpu.f.to_byte(),
+            Scalar::to_u16(cpu.bc()),
+            Scalar::to_u16(cpu.de()),
+            Scalar::to_u16(cpu.hl()),
+            Scalar::to_u16(cpu.sp),
+            cpu.ime,
+            cpu.halted,
+        );
     }
 
     (serial, elapsed)
@@ -163,7 +191,6 @@ fn blargg_cpu_instrs_10_bit_ops_passes() {
 }
 
 #[test]
-#[ignore = "ROM still halts before reporting Passed over serial"]
 fn blargg_cpu_instrs_11_op_a_hl_passes() {
-    assert_serial_passes_within("blargg/cpu_instrs/individual/11-op a,(hl).gb", 60_000_000);
+    assert_serial_passes_within("blargg/cpu_instrs/individual/11-op a,(hl).gb", 80_000_000);
 }
