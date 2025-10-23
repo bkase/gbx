@@ -9,11 +9,18 @@
 
 ## Build, Test, and Development Commands
 - `devenv shell` — enter the reproducible Rust toolchain environment (direnv auto-loads it when available).
-- `devenv tasks run format:workspace` — apply `rustfmt` across the workspace.
-- `devenv tasks run lint:workspace` — run `cargo clippy --all-targets --all-features -D warnings -D clippy::undocumented_unsafe_blocks` (every `unsafe` block must carry a `// SAFETY:` comment explaining the invariants).
-- `devenv tasks run build:workspace` — compile all workspace crates for native targets.
-- `devenv tasks run test:workspace` — execute `cargo test` for every crate, including integration scenarios.
-- Add a `devenv` task for every new developer workflow before documenting raw commands elsewhere.
+- Use the unified runner everywhere (local, Claude, Codex): `bash scripts/tasks/run.sh <task>`.
+  - Format: `bash scripts/tasks/run.sh format:workspace`
+  - Lint: `bash scripts/tasks/run.sh lint:workspace`
+  - Build (native): `bash scripts/tasks/run.sh build:workspace`
+  - Build (wasm): `bash scripts/tasks/run.sh build:wasm`
+  - Tests: `bash scripts/tasks/run.sh test:workspace`
+  - Goldens: `bash scripts/tasks/run.sh test:golden`
+  - Fast PR suite: `bash scripts/tasks/run.sh test:fast`
+  - WASM smoke (headless): `bash scripts/tasks/run.sh test:wasm-smoke`
+  - Demo smoke: `bash scripts/tasks/run.sh test:demo`
+  - Cloud parity slice: `bash scripts/tasks/run.sh ci-parity`
+- `devenv tasks run <task>` still works and delegates to the same script; add future workflows by extending `scripts/tasks/run.sh`.
 - **Always enter `devenv shell` for wasm builds/tests.** The shared-memory/atomics linker flags now live only in `devenv.nix`; invoking `cargo build --target wasm32-unknown-unknown` outside the shell will produce an incompatible artifact.
 
 ## Collaboration Workflow
