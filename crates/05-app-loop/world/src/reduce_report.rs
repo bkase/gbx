@@ -36,6 +36,9 @@ impl ReportReducer for World {
                     self.rom_loaded = true;
                     self.rom_events = self.rom_events.saturating_add(1);
                 }
+                KernelRep::Debug(debug) => {
+                    self.inspector.apply_debug_rep(&debug);
+                }
                 _ => {}
             },
             Report::Audio(audio_report) => match audio_report {
@@ -46,6 +49,8 @@ impl ReportReducer for World {
             },
             Report::Gpu(_) | Report::Fs(_) => {}
         }
+
+        self.inspector.sync_perf(&self.perf);
 
         follow_ups
     }

@@ -1,6 +1,6 @@
 //! Pure intent reducer implementation for the Wave B world state.
 
-use crate::types::{Intent, KernelCmd, TickPurpose, WorkCmd};
+use crate::types::{DebugCmd, Intent, KernelCmd, TickPurpose, WorkCmd};
 use crate::world::World;
 use smallvec::{smallvec, SmallVec};
 
@@ -32,6 +32,32 @@ impl IntentReducer for World {
             Intent::SelectDisplayLane(lane) => {
                 self.display_lane = lane;
                 SmallVec::new()
+            }
+            Intent::DebugSnapshot(group) => {
+                smallvec![WorkCmd::Kernel(KernelCmd::Debug(DebugCmd::Snapshot {
+                    group
+                }))]
+            }
+            Intent::DebugMem {
+                group,
+                space,
+                base,
+                len,
+            } => smallvec![WorkCmd::Kernel(KernelCmd::Debug(DebugCmd::MemWindow {
+                group,
+                space,
+                base,
+                len,
+            }))],
+            Intent::DebugStepInstruction { group, count } => {
+                smallvec![WorkCmd::Kernel(KernelCmd::Debug(
+                    DebugCmd::StepInstruction { group, count }
+                ))]
+            }
+            Intent::DebugStepFrame(group) => {
+                smallvec![WorkCmd::Kernel(KernelCmd::Debug(DebugCmd::StepFrame {
+                    group
+                }))]
             }
         }
     }

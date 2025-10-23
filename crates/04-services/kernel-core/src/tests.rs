@@ -13,6 +13,37 @@ const FRAME_HEIGHT: usize = 144;
 const FRAME_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT * 4;
 const DMG_SHADES: [u8; 4] = [0xFF, 0xAA, 0x55, 0x00];
 
+#[test]
+fn step_instruction_advances_pc_and_cycles_for_nop() {
+    let mut core = core_with_program(&[0x00, 0x76]); // NOP; HALT
+    let (cycles, pc) = core.step_instruction();
+
+    assert!(cycles > 0, "NOP should consume cycles");
+    assert_eq!(pc, 0x0101, "PC should advance to next opcode");
+    assert!(
+        core.cycles_this_frame > 0,
+        "step_instruction should accumulate cycles"
+    );
+}
+
+#[test]
+fn step_instruction_handles_halt_without_advancing_pc() {
+    let mut core = core_with_program(&[0x76]); // HALT at 0x0100
+    core.cpu.halted = true;
+    let (cycles, pc) = core.step_instruction();
+
+    assert!(cycles > 0, "HALT step should still account for cycles");
+    assert_eq!(pc, 0x0100, "PC must remain unchanged while halted");
+    assert!(
+        core.cycles_this_frame > 0,
+        "HALT step should contribute cycles"
+    );
+    assert!(
+        core.cpu.halted,
+        "HALT should remain active without interrupts"
+    );
+}
+
 /// Builds a scalar core with the provided program bytes at reset address 0x0100.
 fn core_with_program(bytes: &[u8]) -> Core<Scalar, BusScalar> {
     let mut rom = vec![0u8; 0x8000];

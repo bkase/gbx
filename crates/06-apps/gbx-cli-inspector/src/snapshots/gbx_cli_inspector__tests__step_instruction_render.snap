@@ -1,0 +1,6 @@
+---
+source: crates/06-apps/gbx-cli-inspector/src/main.rs
+assertion_line: 319
+expression: "render::step_instruction(3, 12, 0x0150)"
+---
+Stepped 3 instruction(s) -> PC=0150 cycles=12

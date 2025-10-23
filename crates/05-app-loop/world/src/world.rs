@@ -1,5 +1,6 @@
 //! Minimal world state container used by reducers and tests.
 
+use crate::inspector::InspectorState;
 use crate::types::{
     AudioCmd, AudioRep, AudioSpan, AvCmd, FollowUps, Intent, KernelCmd, KernelRep, Report,
     TickPurpose, WorkCmd,
@@ -42,6 +43,8 @@ pub struct World {
     pub perf: WorldPerf,
     /// Placeholder health flags.
     pub health: WorldHealth,
+    /// Inspector view-model state.
+    pub inspector: InspectorState,
 }
 
 impl World {
@@ -104,6 +107,10 @@ impl World {
                 self.rom_loaded = true;
                 self.rom_events = self.rom_events.saturating_add(1);
             }
+            Report::Kernel(KernelRep::Debug(debug)) => {
+                self.inspector.apply_debug_rep(&debug);
+                self.inspector.sync_perf(&self.perf);
+            }
             Report::Audio(AudioRep::Underrun) => self.record_audio_underrun(),
             Report::Audio(AudioRep::Played { .. }) => {}
             Report::Kernel(_) | Report::Gpu(_) | Report::Fs(_) => {}
@@ -133,6 +140,7 @@ impl Default for World {
             rom_events: 0,
             perf: WorldPerf::default(),
             health: WorldHealth::default(),
+            inspector: InspectorState::default(),
         }
     }
 }

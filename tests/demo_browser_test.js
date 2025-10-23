@@ -25,28 +25,44 @@ async function run() {
 
   try {
     await driver.get(url);
-    await driver.sleep(6000);
 
-    const logs = await driver.manage().logs().get("browser");
-    const messages = logs.map((entry) => entry.message);
+    const seen = new Set();
+    const collected = [];
+    const deadline = Date.now() + 12_000;
+    let done = false;
 
-    console.log("\n=== Browser Console Logs ===");
-    messages.forEach((msg) => console.log(msg));
-    console.log("===========================\n");
-
-    const failures = messages.filter((m) => m.includes("WASM_TEST_FAIL"));
-    if (failures.length > 0) {
-      throw new Error(`Browser reported failures: ${failures.join("\n")}`);
+    while (!done && Date.now() < deadline) {
+      const logs = await driver.manage().logs().get("browser");
+      for (const entry of logs) {
+        if (seen.has(entry.message)) {
+          continue;
+        }
+        seen.add(entry.message);
+        collected.push(entry.message);
+        if (entry.message.includes("WASM_TEST_FAIL")) {
+          console.log(entry.message);
+          throw new Error(`Browser reported failure: ${entry.message}`);
+        }
+        if (entry.message.includes("WASM_TEST_DONE")) {
+          done = true;
+        }
+      }
+      if (!done) {
+        await driver.sleep(250);
+      }
     }
 
-    const passed = messages.filter((m) => m.includes("WASM_TEST_PASS:"));
-    if (passed.length === 0) {
+    if (!done) {
+      throw new Error("Timed out waiting for WASM_TEST_DONE marker");
+    }
+
+    if (!collected.some((m) => m.includes("WASM_TEST_PASS:"))) {
       throw new Error("No WASM_TEST_PASS messages observed");
     }
 
-    if (!messages.some((m) => m.includes("WASM_TEST_DONE"))) {
-      throw new Error("Missing WASM_TEST_DONE marker");
-    }
+    console.log("\n=== Browser Console Logs ===");
+    collected.forEach((msg) => console.log(msg));
+    console.log("===========================\n");
 
     console.log("✅ GBX UI integration test passed");
   } finally {

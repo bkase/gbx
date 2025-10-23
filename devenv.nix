@@ -212,6 +212,7 @@ in {
     devenv tasks run assets:testroms
     export RUSTFLAGS="$NATIVE_RUSTFLAGS"
     cargo test -p tests transport_schema_goldens_v1
+    cargo test -p tests inspector_ndjson_matches_golden
   '';
 
   # Tight test discipline tasks (stable API for CI)

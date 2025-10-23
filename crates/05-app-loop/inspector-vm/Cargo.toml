@@ -1,9 +1,9 @@
 [package]
-name = "world"
+name = "inspector-vm"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+serde = { workspace = true }
+serde_json = "1.0"
 service-abi = { path = "../../03-driver/service-abi" }
-smallvec = { workspace = true }
-inspector-vm = { path = "../inspector-vm" }

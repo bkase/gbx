@@ -15,9 +15,11 @@ use rkyv::{
     Archive, Serialize,
 };
 use service_abi::{
-    AudioCmd, AudioRep, AudioSpan, FsCmd, FsRep, GpuCmd, GpuRep, KernelCmd, KernelRep, SlotSpan,
-    TickPurpose,
+    AudioCmd, AudioRep, AudioSpan, CpuVM, DebugCmd, DebugRep, FsCmd, FsRep, GpuCmd, GpuRep,
+    InspectorVMMinimal, KernelCmd, KernelRep, MemSpace, PpuVM, SlotSpan, StepKind, SubmitPolicy,
+    TickPurpose, TimersVM,
 };
+use std::sync::Arc;
 use transport::schema::*;
 use transport::Envelope;
 use transport_fabric::{Codec, Encoded, FabricError, FabricResult, PortClass};
@@ -58,6 +60,7 @@ impl Codec for KernelCodec {
             KernelCmd::Terminate { group } => {
                 KernelCmdV1::Terminate(KernelTerminateCmdV1 { group: *group })
             }
+            KernelCmd::Debug(debug) => KernelCmdV1::Debug(encode_debug_cmd(debug)),
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
@@ -91,42 +94,62 @@ impl Codec for KernelCodec {
             ArchivedKernelCmdV1::Terminate(term) => Ok(KernelCmd::Terminate {
                 group: term.group.to_native(),
             }),
+            ArchivedKernelCmdV1::Debug(debug) => Ok(KernelCmd::Debug(decode_debug_cmd(debug))),
         }
     }
 
     fn encode_rep(&self, rep: &Self::Rep) -> FabricResult<Encoded> {
         let tag = TAG_KERNEL_REP;
-        let schema = match rep {
-            KernelRep::TickDone { .. } => KernelRepV1::TickDone {
-                purpose: TickPurposeV1::Display,
-                budget: 0,
-            },
+        let (class, schema) = match rep {
+            KernelRep::TickDone { .. } => (
+                PortClass::Lossless,
+                KernelRepV1::TickDone {
+                    purpose: TickPurposeV1::Display,
+                    budget: 0,
+                },
+            ),
             KernelRep::LaneFrame {
                 lane,
                 frame_id,
                 span,
                 ..
-            } => KernelRepV1::LaneFrame {
-                lane: *lane,
-                frame_id: *frame_id,
-                span: encode_slot_span(span),
-            },
-            KernelRep::RomLoaded { bytes_len, .. } => KernelRepV1::RomLoaded {
-                bytes_len: *bytes_len as u32,
-            },
-            KernelRep::AudioReady { group, span, .. } => KernelRepV1::AudioReady {
-                group: *group,
-                span: encode_audio_slot_span(span),
-            },
+            } => (
+                PortClass::Lossless,
+                KernelRepV1::LaneFrame {
+                    lane: *lane,
+                    frame_id: *frame_id,
+                    span: encode_slot_span(span),
+                },
+            ),
+            KernelRep::RomLoaded { bytes_len, .. } => (
+                PortClass::Lossless,
+                KernelRepV1::RomLoaded {
+                    bytes_len: *bytes_len as u32,
+                },
+            ),
+            KernelRep::AudioReady { group, span, .. } => (
+                PortClass::Lossless,
+                KernelRepV1::AudioReady {
+                    group: *group,
+                    span: encode_audio_slot_span(span),
+                },
+            ),
             KernelRep::DroppedThumb { .. } => {
                 return Err(FabricError::Unsupported(
                     "kernel codec does not yet support thumbnail reports",
                 ))
             }
+            KernelRep::Debug(rep) => {
+                let class = match rep {
+                    DebugRep::Snapshot(_) => PortClass::Coalesce,
+                    DebugRep::MemWindow { .. } | DebugRep::Stepped { .. } => PortClass::Lossless,
+                };
+                (class, KernelRepV1::Debug(encode_debug_rep(rep)))
+            }
         };
         let payload = serialize(&schema)?;
         Ok(Encoded::new(
-            PortClass::Lossless,
+            class,
             Envelope::new(tag, SCHEMA_VERSION_V1),
             payload,
         ))
@@ -159,6 +182,7 @@ impl Codec for KernelCodec {
                 group: group.to_native(),
                 span: audio_span_from_slot(span),
             },
+            ArchivedKernelRepV1::Debug(rep) => KernelRep::Debug(decode_debug_rep(rep)),
         };
         Ok(rep)
     }
@@ -346,6 +370,232 @@ impl Codec for AudioCodec {
     }
 }
 
+fn encode_debug_cmd(cmd: &DebugCmd) -> KernelDebugCmdV1 {
+    match cmd {
+        DebugCmd::Snapshot { group } => KernelDebugCmdV1::Snapshot { group: *group },
+        DebugCmd::MemWindow {
+            group,
+            space,
+            base,
+            len,
+        } => KernelDebugCmdV1::MemWindow {
+            group: *group,
+            space: encode_mem_space(*space),
+            base: *base,
+            len: *len,
+        },
+        DebugCmd::StepInstruction { group, count } => KernelDebugCmdV1::StepInstruction {
+            group: *group,
+            count: *count,
+        },
+        DebugCmd::StepFrame { group } => KernelDebugCmdV1::StepFrame { group: *group },
+    }
+}
+
+fn decode_debug_cmd(cmd: &ArchivedKernelDebugCmdV1) -> DebugCmd {
+    match cmd {
+        ArchivedKernelDebugCmdV1::Snapshot { group } => DebugCmd::Snapshot {
+            group: group.to_native(),
+        },
+        ArchivedKernelDebugCmdV1::MemWindow {
+            group,
+            space,
+            base,
+            len,
+        } => DebugCmd::MemWindow {
+            group: group.to_native(),
+            space: decode_mem_space(space),
+            base: base.to_native(),
+            len: len.to_native(),
+        },
+        ArchivedKernelDebugCmdV1::StepInstruction { group, count } => DebugCmd::StepInstruction {
+            group: group.to_native(),
+            count: count.to_native(),
+        },
+        ArchivedKernelDebugCmdV1::StepFrame { group } => DebugCmd::StepFrame {
+            group: group.to_native(),
+        },
+    }
+}
+
+fn encode_debug_rep(rep: &DebugRep) -> KernelDebugRepV1 {
+    match rep {
+        DebugRep::Snapshot(snapshot) => KernelDebugRepV1::Snapshot(encode_snapshot(snapshot)),
+        DebugRep::MemWindow { space, base, bytes } => KernelDebugRepV1::MemWindow {
+            space: encode_mem_space(*space),
+            base: *base,
+            bytes: bytes.as_ref().to_vec(),
+        },
+        DebugRep::Stepped {
+            kind,
+            cycles,
+            pc,
+            disasm,
+        } => KernelDebugRepV1::Stepped {
+            kind: encode_step_kind(*kind),
+            cycles: *cycles,
+            pc: *pc,
+            disasm: disasm.clone(),
+        },
+    }
+}
+
+fn decode_debug_rep(rep: &ArchivedKernelDebugRepV1) -> DebugRep {
+    match rep {
+        ArchivedKernelDebugRepV1::Snapshot(snapshot) => {
+            DebugRep::Snapshot(decode_snapshot(snapshot))
+        }
+        ArchivedKernelDebugRepV1::MemWindow { space, base, bytes } => DebugRep::MemWindow {
+            space: decode_mem_space(space),
+            base: base.to_native(),
+            bytes: Arc::<[u8]>::from(bytes.as_slice()),
+        },
+        ArchivedKernelDebugRepV1::Stepped {
+            kind,
+            cycles,
+            pc,
+            disasm,
+        } => DebugRep::Stepped {
+            kind: decode_step_kind(kind),
+            cycles: cycles.to_native(),
+            pc: pc.to_native(),
+            disasm: disasm.as_ref().map(|arch| arch.as_str().to_string()),
+        },
+    }
+}
+
+fn encode_snapshot(snapshot: &InspectorVMMinimal) -> KernelDebugSnapshotV1 {
+    KernelDebugSnapshotV1 {
+        cpu: encode_cpu(&snapshot.cpu),
+        ppu: encode_ppu(&snapshot.ppu),
+        timers: encode_timers(&snapshot.timers),
+        io: snapshot.io.clone(),
+    }
+}
+
+fn decode_snapshot(snapshot: &ArchivedKernelDebugSnapshotV1) -> InspectorVMMinimal {
+    InspectorVMMinimal {
+        cpu: decode_cpu(&snapshot.cpu),
+        ppu: decode_ppu(&snapshot.ppu),
+        timers: decode_timers(&snapshot.timers),
+        io: snapshot.io.as_slice().to_vec(),
+    }
+}
+
+fn encode_cpu(cpu: &CpuVM) -> KernelDebugCpuVmV1 {
+    KernelDebugCpuVmV1 {
+        a: cpu.a,
+        f: cpu.f,
+        b: cpu.b,
+        c: cpu.c,
+        d: cpu.d,
+        e: cpu.e,
+        h: cpu.h,
+        l: cpu.l,
+        sp: cpu.sp,
+        pc: cpu.pc,
+        ime: cpu.ime,
+        halted: cpu.halted,
+    }
+}
+
+fn decode_cpu(cpu: &ArchivedKernelDebugCpuVmV1) -> CpuVM {
+    CpuVM {
+        a: cpu.a,
+        f: cpu.f,
+        b: cpu.b,
+        c: cpu.c,
+        d: cpu.d,
+        e: cpu.e,
+        h: cpu.h,
+        l: cpu.l,
+        sp: cpu.sp.to_native(),
+        pc: cpu.pc.to_native(),
+        ime: cpu.ime,
+        halted: cpu.halted,
+    }
+}
+
+fn encode_ppu(ppu: &PpuVM) -> KernelDebugPpuVmV1 {
+    KernelDebugPpuVmV1 {
+        ly: ppu.ly,
+        mode: ppu.mode,
+        stat: ppu.stat,
+        lcdc: ppu.lcdc,
+        scx: ppu.scx,
+        scy: ppu.scy,
+        wy: ppu.wy,
+        wx: ppu.wx,
+        bgp: ppu.bgp,
+        frame_ready: ppu.frame_ready,
+    }
+}
+
+fn decode_ppu(ppu: &ArchivedKernelDebugPpuVmV1) -> PpuVM {
+    PpuVM {
+        ly: ppu.ly,
+        mode: ppu.mode,
+        stat: ppu.stat,
+        lcdc: ppu.lcdc,
+        scx: ppu.scx,
+        scy: ppu.scy,
+        wy: ppu.wy,
+        wx: ppu.wx,
+        bgp: ppu.bgp,
+        frame_ready: ppu.frame_ready,
+    }
+}
+
+fn encode_timers(timers: &TimersVM) -> KernelDebugTimersVmV1 {
+    KernelDebugTimersVmV1 {
+        div: timers.div,
+        tima: timers.tima,
+        tma: timers.tma,
+        tac: timers.tac,
+    }
+}
+
+fn decode_timers(timers: &ArchivedKernelDebugTimersVmV1) -> TimersVM {
+    TimersVM {
+        div: timers.div,
+        tima: timers.tima,
+        tma: timers.tma,
+        tac: timers.tac,
+    }
+}
+
+fn encode_mem_space(space: MemSpace) -> KernelDebugMemSpaceV1 {
+    match space {
+        MemSpace::Vram => KernelDebugMemSpaceV1::Vram,
+        MemSpace::Wram => KernelDebugMemSpaceV1::Wram,
+        MemSpace::Oam => KernelDebugMemSpaceV1::Oam,
+        MemSpace::Io => KernelDebugMemSpaceV1::Io,
+    }
+}
+
+fn decode_mem_space(space: &ArchivedKernelDebugMemSpaceV1) -> MemSpace {
+    match space {
+        ArchivedKernelDebugMemSpaceV1::Vram => MemSpace::Vram,
+        ArchivedKernelDebugMemSpaceV1::Wram => MemSpace::Wram,
+        ArchivedKernelDebugMemSpaceV1::Oam => MemSpace::Oam,
+        ArchivedKernelDebugMemSpaceV1::Io => MemSpace::Io,
+    }
+}
+
+fn encode_step_kind(kind: StepKind) -> KernelDebugStepKindV1 {
+    match kind {
+        StepKind::Instruction => KernelDebugStepKindV1::Instruction,
+        StepKind::Frame => KernelDebugStepKindV1::Frame,
+    }
+}
+
+fn decode_step_kind(kind: &ArchivedKernelDebugStepKindV1) -> StepKind {
+    match kind {
+        ArchivedKernelDebugStepKindV1::Instruction => StepKind::Instruction,
+        ArchivedKernelDebugStepKindV1::Frame => StepKind::Frame,
+    }
+}
+
 fn serialize<T>(value: &T) -> FabricResult<Vec<u8>>
 where
     T: Archive,
@@ -365,6 +615,15 @@ fn default_kernel_policy(cmd: &KernelCmd) -> PortClass {
         KernelCmd::LoadRom { .. } => PortClass::Lossless,
         KernelCmd::SetInputs { .. } => PortClass::Lossless,
         KernelCmd::Terminate { .. } => PortClass::Lossless,
+        KernelCmd::Debug(cmd) => class_from_policy(cmd.submit_policy()),
+    }
+}
+
+fn class_from_policy(policy: SubmitPolicy) -> PortClass {
+    match policy {
+        SubmitPolicy::Must | SubmitPolicy::Lossless => PortClass::Lossless,
+        SubmitPolicy::Coalesce => PortClass::Coalesce,
+        SubmitPolicy::BestEffort => PortClass::BestEffort,
     }
 }
 

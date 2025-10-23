@@ -1,5 +1,6 @@
 //! Integration-style coverage for the world report reducer.
 
+use service_abi::{CpuVM, DebugRep, InspectorVMMinimal, PpuVM, TimersVM};
 use world::{
     AudioRep, AvCmd, FrameSpan, GpuCmd, Intent, IntentPriority, KernelRep, Report, ReportReducer,
     World,
@@ -91,4 +92,50 @@ fn audio_underrun_increments_metric() {
     assert!(follow_ups.immediate_av.is_empty());
     assert!(follow_ups.deferred_intents.is_empty());
     assert_eq!(world.perf.audio_underruns, 1);
+}
+
+#[test]
+fn debug_snapshot_report_updates_inspector_state() {
+    let mut world = World::new();
+    let snapshot = DebugRep::Snapshot(InspectorVMMinimal {
+        cpu: CpuVM {
+            a: 0x42,
+            f: 0,
+            b: 0,
+            c: 0,
+            d: 0,
+            e: 0,
+            h: 0,
+            l: 0,
+            sp: 0xFF00,
+            pc: 0x0200,
+            ime: false,
+            halted: false,
+        },
+        ppu: PpuVM {
+            ly: 0,
+            mode: 0,
+            stat: 0x85,
+            lcdc: 0x91,
+            scx: 0,
+            scy: 0,
+            wy: 0,
+            wx: 0,
+            bgp: 0,
+            frame_ready: false,
+        },
+        timers: TimersVM {
+            div: 0,
+            tima: 0,
+            tma: 0,
+            tac: 0,
+        },
+        io: vec![0; 0x80],
+    });
+
+    let follow_ups = world.reduce_report(Report::Kernel(KernelRep::Debug(snapshot)));
+
+    assert!(follow_ups.immediate_av.is_empty());
+    assert_eq!(world.inspector.vm.cpu.a, 0x42);
+    assert_eq!(world.inspector.vm.cpu.pc, 0x0200);
 }

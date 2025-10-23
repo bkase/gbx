@@ -51,6 +51,11 @@
 - Ensure every commit builds and passes tests; re-run `format:workspace` and `lint:workspace` prior to pushing.
 - Pull requests should explain the user impact, reference relevant architecture sections, and link issues or design notes when available.
 - Provide screenshots or CLI transcripts when altering developer workflows or observable behavior (e.g., new tasks or flags).
+- Use the Phase A inspector CLI to capture state when debugging emulator issues:
+  - Start a session inside the dev shell (`devenv shell`) so the pinned toolchain and wasm targets are active.
+  - Load a ROM snapshot via `cargo run -p gbx-cli-inspector -- <rom.gb> snapshot` to inspect CPU/PPU/timer state.
+  - Collect memory windows with `mem` (e.g. VRAM/OAM) and step execution with `step`/`step-frame` to isolate divergent paths.
+  - When an inspector run exposes a regression, refresh the NDJSON golden with `UPDATE_GOLDEN=1 devenv tasks run test:golden`, commit the updated fixtures, and document the scenario in your PR notes.
 
 ## Architecture & Services Primer
 - Scheduler budgets (`DEFAULT_INTENT_BUDGET`, `DEFAULT_REPORT_BUDGET`) encode frame pacing—update them alongside tests.

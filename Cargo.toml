@@ -27,11 +27,13 @@ members = [
   "crates/05-app-loop/hub",
   "crates/05-app-loop/app",
   "crates/05-app-loop/gbx-frame",
+  "crates/05-app-loop/inspector-vm",
 
   # 06 – Apps
   "crates/06-apps/gbx-wasm",
   "crates/06-apps/mock",
   "crates/06-apps/runtime-web-harness",
+  "crates/06-apps/gbx-cli-inspector",
 
   # 99 – Tests
   "crates/99-tests/tests",

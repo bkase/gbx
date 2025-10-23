@@ -1,0 +1,9 @@
+---
+source: crates/06-apps/gbx-cli-inspector/src/main.rs
+assertion_line: 308
+expression: "render::snapshot(&sample_vm())"
+---
+Registers: AF=12B0 BC=0000 DE=0000 HL=0000
+SP=C000 PC=0200 IME=1 HALT=0
+PPU: LY=00 MODE=1 LCDC=91 STAT=85
+Timers: DIV=12 TIMA=34 TMA=00 TAC=00

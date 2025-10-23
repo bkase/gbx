@@ -4,6 +4,8 @@
 //! structs that frontends, schedulers, and services compile against, along with
 //! a minimal `World` container used by reducers and tests.
 
+/// Inspector state container and helpers.
+pub mod inspector;
 /// Pure intent reducer for Wave B scaffolding.
 pub mod reduce_intent;
 /// Pure report reducer for Wave B scaffolding.
@@ -21,3 +23,4 @@ pub use crate::types::{
     TickPurpose, WorkCmd,
 };
 pub use crate::world::{World, WorldHealth, WorldPerf};
+pub use inspector::InspectorState;

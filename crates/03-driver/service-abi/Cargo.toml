@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 smallvec = { workspace = true }
 transport-fabric = { path = "../../01-transport/transport-fabric" }
+serde = { workspace = true }

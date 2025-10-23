@@ -1,0 +1,6 @@
+---
+source: crates/06-apps/gbx-cli-inspector/src/main.rs
+assertion_line: 314
+expression: "render::hexdump(0x8000, &bytes)"
+---
+8000: 00 11 22 33 44

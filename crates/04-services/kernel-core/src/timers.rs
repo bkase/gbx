@@ -94,17 +94,12 @@ impl TimerIo for BusScalar {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum TimaState {
+    #[default]
     Running,
     Reloading,
     Reloaded,
-}
-
-impl Default for TimaState {
-    fn default() -> Self {
-        TimaState::Running
-    }
 }
 
 /// Game Boy timer block (DIV + TIMA/TMA/TAC).
@@ -198,10 +193,8 @@ impl Timers {
             self.timer_input = new_input;
         }
 
-        if let Some(_) = io.take_tima_write() {
-            if matches!(self.tima_state, TimaState::Reloaded) {
-                // Writes ignored per hardware, state unchanged.
-            }
+        if io.take_tima_write().is_some() && matches!(self.tima_state, TimaState::Reloaded) {
+            // Writes ignored per hardware, state unchanged.
         }
 
         while let Some(value) = io.take_tma_write() {
@@ -214,12 +207,12 @@ impl Timers {
             if old_tac & 0x04 != 0 {
                 let old_mask = Self::tac_trigger_bit(old_tac);
                 let new_mask = Self::tac_trigger_bit(new_tac);
-                if self.div_counter & old_mask != 0 {
-                    if new_tac & 0x04 == 0 || self.div_counter & new_mask == 0 {
-                        self.increment_tima(io);
-                        if std::env::var_os("GBX_TRACE_TIMER").is_some() {
-                            eprintln!("TAC write triggered TIMA increment");
-                        }
+                if self.div_counter & old_mask != 0
+                    && (new_tac & 0x04 == 0 || self.div_counter & new_mask == 0)
+                {
+                    self.increment_tima(io);
+                    if std::env::var_os("GBX_TRACE_TIMER").is_some() {
+                        eprintln!("TAC write triggered TIMA increment");
                     }
                 }
             }

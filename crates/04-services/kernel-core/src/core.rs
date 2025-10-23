@@ -187,6 +187,38 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
         consumed
     }
 
+    /// Executes exactly one instruction or interrupt service and returns cycles + new PC.
+    pub fn step_instruction(&mut self) -> (u32, u16)
+    where
+        B: TimerIo + InterruptCtrl + PpuIo + SerialIo,
+    {
+        let prev_pc = E::to_u16(self.cpu.pc);
+        let mut cycles = self.service_interrupts();
+        if cycles == 0 {
+            if self.cpu.halted {
+                cycles = 4;
+            } else {
+                cycles = self.execute_opcode();
+            }
+        }
+
+        if cycles != 0 {
+            self.timers.step(cycles, &mut self.bus);
+            if self.ppu_enabled {
+                self.ppu.step(cycles, &mut self.bus);
+            }
+            self.bus.step_serial(cycles);
+            self.cycles_this_frame = self.cycles_this_frame.wrapping_add(cycles);
+        }
+
+        let pc = if cycles == 0 {
+            prev_pc
+        } else {
+            E::to_u16(self.cpu.pc)
+        };
+        (cycles, pc)
+    }
+
     fn execute_opcode(&mut self) -> u32
     where
         B: TimerIo + InterruptCtrl,

@@ -9,6 +9,9 @@ mod schema_golden;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod frame_sanity;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod inspector_ndjson;
+
 #[cfg(test)]
 mod tests {
     use app::Scheduler;

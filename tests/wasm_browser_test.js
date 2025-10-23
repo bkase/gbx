@@ -23,28 +23,44 @@ async function run() {
 
   try {
     await driver.get(url);
-    await driver.sleep(6000);
+    const seen = new Set();
+    const deadline = Date.now() + 10_000;
+    let done = false;
+    let messages = [];
 
-    const logs = await driver.manage().logs().get("browser");
-    const messages = logs.map((entry) => entry.message);
+    while (!done && Date.now() < deadline) {
+      const logs = await driver.manage().logs().get("browser");
+      for (const entry of logs) {
+        if (seen.has(entry.message)) {
+          continue;
+        }
+        seen.add(entry.message);
+        messages.push(entry.message);
+        if (entry.message.includes("WASM_TEST_FAIL")) {
+          console.log(entry.message);
+          throw new Error(`Browser reported failure: ${entry.message}`);
+        }
+        if (entry.message.includes("WASM_TEST_DONE")) {
+          done = true;
+        }
+      }
+      if (!done) {
+        await driver.sleep(250);
+      }
+    }
+
+    if (!done) {
+      throw new Error("Timed out waiting for WASM_TEST_DONE marker");
+    }
+
+    const passes = messages.filter((m) => m.includes("WASM_TEST_PASS:"));
+    if (passes.length === 0) {
+      throw new Error("No WASM_TEST_PASS messages observed");
+    }
 
     console.log("\n=== Browser Console Logs ===");
     messages.forEach((msg) => console.log(msg));
     console.log("===========================\n");
-
-    const failures = messages.filter((m) => m.includes("WASM_TEST_FAIL"));
-    if (failures.length > 0) {
-      throw new Error(`Browser reported failures: ${failures.join("\n")}`);
-    }
-
-    const passed = messages.filter((m) => m.includes("WASM_TEST_PASS:"));
-    if (passed.length === 0) {
-      throw new Error("No WASM_TEST_PASS messages observed");
-    }
-
-    if (!messages.some((m) => m.includes("WASM_TEST_DONE"))) {
-      throw new Error("Missing WASM_TEST_DONE marker");
-    }
 
     console.log("✅ wasm transport browser smoke tests passed");
   } finally {

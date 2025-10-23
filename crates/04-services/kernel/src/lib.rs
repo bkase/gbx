@@ -6,10 +6,11 @@ mod sink_transport;
 
 use crate::instance::{AnyCore, Instance};
 use crate::sink_transport::TransportFrameSink;
+use kernel_core::ppu_stub::CYCLES_PER_FRAME;
 use kernel_core::{BusScalar, Core, CoreConfig, Model};
 use service_abi::{
-    FrameSpan, KernelCmd, KernelRep, KernelServiceHandle, Service, SubmitOutcome, SubmitPolicy,
-    TickPurpose,
+    DebugCmd, DebugRep, FrameSpan, KernelCmd, KernelRep, KernelServiceHandle, Service, StepKind,
+    SubmitOutcome, SubmitPolicy, TickPurpose,
 };
 use services_common::{drain_queue, try_submit_queue, LocalQueue};
 use smallvec::{smallvec, SmallVec};
@@ -80,7 +81,7 @@ impl KernelFarm {
         self.instances.get_mut(&id).expect("instance exists")
     }
 
-    pub fn tick(&mut self, id: u16, budget: u32, out: &mut Vec<KernelRep>) {
+    pub fn tick(&mut self, id: u16, budget: u32, out: &mut Vec<KernelRep>) -> u32 {
         let inst = self.ensure_instance(id);
         let cycles = inst.step_cycles(budget);
         let mut publish_frame = |inst: &mut Instance| -> bool {
@@ -124,6 +125,7 @@ impl KernelFarm {
             lanes_mask: 0b1,
             cycles_done: cycles,
         });
+        cycles
     }
 
     pub fn load_rom(&mut self, id: u16, rom: Arc<[u8]>) -> usize {
@@ -140,6 +142,52 @@ impl KernelFarm {
 
     pub fn terminate(&mut self, id: u16) {
         self.instances.remove(&id);
+    }
+
+    pub fn handle_debug(&mut self, cmd: &DebugCmd, out: &mut Vec<KernelRep>) {
+        match cmd {
+            DebugCmd::Snapshot { group } => {
+                let inst = self.ensure_instance(*group);
+                let snapshot = inst.inspector_snapshot();
+                out.push(KernelRep::Debug(DebugRep::Snapshot(snapshot)));
+            }
+            DebugCmd::MemWindow {
+                group,
+                space,
+                base,
+                len,
+            } => {
+                let inst = self.ensure_instance(*group);
+                let bytes = inst.mem_window(*space, *base, *len);
+                out.push(KernelRep::Debug(DebugRep::MemWindow {
+                    space: *space,
+                    base: *base,
+                    bytes: Arc::<[u8]>::from(bytes.into_boxed_slice()),
+                }));
+            }
+            DebugCmd::StepInstruction { group, count } => {
+                let inst = self.ensure_instance(*group);
+                let (cycles, pc) = inst.step_instructions(*count);
+                out.push(KernelRep::Debug(DebugRep::Stepped {
+                    kind: StepKind::Instruction,
+                    cycles,
+                    pc,
+                    disasm: None,
+                }));
+            }
+            DebugCmd::StepFrame { group } => {
+                let mut intermediate = Vec::new();
+                let cycles = self.tick(*group, CYCLES_PER_FRAME, &mut intermediate);
+                let pc = self.instances.get(group).map(|inst| inst.pc()).unwrap_or(0);
+                out.extend(intermediate);
+                out.push(KernelRep::Debug(DebugRep::Stepped {
+                    kind: StepKind::Frame,
+                    cycles,
+                    pc,
+                    disasm: None,
+                }));
+            }
+        }
     }
 }
 
@@ -190,6 +238,7 @@ impl KernelService {
             KernelCmd::LoadRom { .. } => 1,
             KernelCmd::SetInputs { .. } => 0,
             KernelCmd::Terminate { .. } => 0,
+            KernelCmd::Debug(debug) => debug.expected_reports(),
         }
     }
 
@@ -202,6 +251,7 @@ impl KernelService {
             KernelCmd::LoadRom { .. } => SubmitPolicy::Lossless,
             KernelCmd::SetInputs { .. } => SubmitPolicy::Lossless,
             KernelCmd::Terminate { .. } => SubmitPolicy::Lossless,
+            KernelCmd::Debug(debug) => debug.submit_policy(),
         }
     }
 
@@ -209,8 +259,9 @@ impl KernelService {
         match cmd {
             KernelCmd::Tick { group, budget, .. } => {
                 let mut out = Vec::new();
-                self.farm
-                    .with_mut(|farm| farm.tick(*group, *budget, &mut out));
+                self.farm.with_mut(|farm| {
+                    let _ = farm.tick(*group, *budget, &mut out);
+                });
                 SmallVec::from_vec(out)
             }
             KernelCmd::LoadRom { group, bytes } => {
@@ -229,6 +280,12 @@ impl KernelService {
             KernelCmd::Terminate { group } => {
                 self.farm.with_mut(|farm| farm.terminate(*group));
                 SmallVec::new()
+            }
+            KernelCmd::Debug(debug) => {
+                let mut out = Vec::new();
+                self.farm
+                    .with_mut(|farm| farm.handle_debug(debug, &mut out));
+                SmallVec::from_vec(out)
             }
         }
     }

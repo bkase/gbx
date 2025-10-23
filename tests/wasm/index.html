@@ -12,6 +12,7 @@
         wasm_transport_worker_flood_frames,
         wasm_transport_worker_burst_fairness,
         wasm_transport_worker_backpressure_recovery,
+        wasm_inspector_debug_smoke,
       } from './pkg/fabric_worker_wasm.js';
 
       async function run() {
@@ -26,6 +27,7 @@
             ['wasm_transport_worker_flood_frames', wasm_transport_worker_flood_frames],
             ['wasm_transport_worker_burst_fairness', wasm_transport_worker_burst_fairness],
             ['wasm_transport_worker_backpressure_recovery', wasm_transport_worker_backpressure_recovery],
+            ['wasm_inspector_debug_smoke', wasm_inspector_debug_smoke],
           ];
 
           for (const [name, fn] of steps) {

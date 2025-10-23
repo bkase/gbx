@@ -5,6 +5,7 @@
 
 #![allow(missing_docs)]
 
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -104,6 +105,135 @@ pub enum TickPurpose {
     Exploration,
 }
 
+/// Memory space targeted by inspector debug commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum MemSpace {
+    /// Video RAM (0x8000-0x9FFF).
+    Vram,
+    /// Work RAM (0xC000-0xDFFF).
+    Wram,
+    /// Object attribute memory (sprite table, 0xFE00-0xFE9F).
+    Oam,
+    /// I/O register window (0xFF00-0xFF7F).
+    Io,
+}
+
+/// CPU register snapshot used by inspector view models.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CpuVM {
+    pub a: u8,
+    pub f: u8,
+    pub b: u8,
+    pub c: u8,
+    pub d: u8,
+    pub e: u8,
+    pub h: u8,
+    pub l: u8,
+    pub sp: u16,
+    pub pc: u16,
+    pub ime: bool,
+    pub halted: bool,
+}
+
+/// PPU state snapshot exposed to inspector view models.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PpuVM {
+    pub ly: u8,
+    pub mode: u8,
+    pub stat: u8,
+    pub lcdc: u8,
+    pub scx: u8,
+    pub scy: u8,
+    pub wy: u8,
+    pub wx: u8,
+    pub bgp: u8,
+    pub frame_ready: bool,
+}
+
+/// Timer registers snapshot exposed to inspector view models.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TimersVM {
+    pub div: u8,
+    pub tima: u8,
+    pub tma: u8,
+    pub tac: u8,
+}
+
+/// Minimal inspector payload emitted with snapshots.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct InspectorVMMinimal {
+    pub cpu: CpuVM,
+    pub ppu: PpuVM,
+    pub timers: TimersVM,
+    pub io: Vec<u8>,
+}
+
+/// Execution step classification for debug stepping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum StepKind {
+    /// Exactly one CPU instruction executed.
+    Instruction,
+    /// Emulation advanced to the next frame boundary.
+    Frame,
+}
+
+/// Trace information reported after stepping.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TraceVM {
+    pub last_pc: u16,
+    pub disasm_line: String,
+    pub cycles: u32,
+}
+
+/// Debug command variants routed to the kernel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DebugCmd {
+    /// Capture a fresh snapshot of CPU/PPU/timer state.
+    Snapshot { group: u16 },
+    /// Fetch a memory window from the requested address space.
+    MemWindow {
+        group: u16,
+        space: MemSpace,
+        base: u16,
+        len: u16,
+    },
+    /// Step a specific number of CPU instructions.
+    StepInstruction { group: u16, count: u32 },
+    /// Step exactly one frame worth of cycles.
+    StepFrame { group: u16 },
+}
+
+impl DebugCmd {
+    /// Returns the scheduler policy for this debug command.
+    pub fn submit_policy(&self) -> SubmitPolicy {
+        match self {
+            DebugCmd::StepInstruction { .. } | DebugCmd::StepFrame { .. } => SubmitPolicy::Lossless,
+            DebugCmd::Snapshot { .. } => SubmitPolicy::Coalesce,
+            DebugCmd::MemWindow { .. } => SubmitPolicy::Lossless,
+        }
+    }
+
+    /// Returns the expected number of reports produced by the command.
+    pub fn expected_reports(&self) -> usize {
+        match self {
+            DebugCmd::Snapshot { .. } => 1,
+            DebugCmd::MemWindow { .. } => 1,
+            DebugCmd::StepInstruction { .. } => 1,
+            DebugCmd::StepFrame { .. } => 3,
+        }
+    }
+
+    /// Returns the kernel group the command targets.
+    pub fn group(&self) -> u16 {
+        match self {
+            DebugCmd::Snapshot { group }
+            | DebugCmd::MemWindow { group, .. }
+            | DebugCmd::StepInstruction { group, .. }
+            | DebugCmd::StepFrame { group } => *group,
+        }
+    }
+}
+
 /// Command directed at the kernel service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KernelCmd {
@@ -137,6 +267,8 @@ pub enum KernelCmd {
         /// Kernel group identifier to terminate.
         group: u16,
     },
+    /// Inspector/debug command routed to the kernel.
+    Debug(DebugCmd),
 }
 
 /// Kernel report variants.
@@ -182,6 +314,28 @@ pub enum KernelRep {
         group: u16,
         /// Count of dropped thumbnails.
         count: u32,
+    },
+    /// Inspector/debug payload emitted by the kernel.
+    Debug(DebugRep),
+}
+
+/// Debug report emitted by the kernel service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DebugRep {
+    /// Snapshot payload carrying CPU/PPU/timer state.
+    Snapshot(InspectorVMMinimal),
+    /// Memory window bytes for a specific address space.
+    MemWindow {
+        space: MemSpace,
+        base: u16,
+        bytes: Arc<[u8]>,
+    },
+    /// Result of a stepping command.
+    Stepped {
+        kind: StepKind,
+        cycles: u32,
+        pc: u16,
+        disasm: Option<String>,
     },
 }
 

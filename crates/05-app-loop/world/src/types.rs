@@ -1,4 +1,5 @@
 //! Core command, intent, and report types shared across the emulator world.
+#![allow(missing_docs)]
 //!
 //! These shapes mirror the Wave A contract documented in `docs/architecture.md`
 //! so that frontends, schedulers, and services can compile against stable
@@ -9,8 +10,9 @@ use std::sync::Arc;
 
 // Re-export service ABI types that world uses
 pub use service_abi::{
-    AudioCmd, AudioRep, AudioSpan, FrameSpan, FsCmd, FsRep, GpuCmd, GpuRep, KernelCmd, KernelRep,
-    SlotSpan, SubmitOutcome, SubmitPolicy, TickPurpose,
+    AudioCmd, AudioRep, AudioSpan, CpuVM, DebugCmd, DebugRep, FrameSpan, FsCmd, FsRep, GpuCmd,
+    GpuRep, InspectorVMMinimal, KernelCmd, KernelRep, MemSpace, PpuVM, SlotSpan, StepKind,
+    SubmitOutcome, SubmitPolicy, TickPurpose, TimersVM, TraceVM,
 };
 
 /// Priority level for intent scheduling (P0 is highest).
@@ -42,6 +44,19 @@ pub enum Intent {
     },
     /// Select which display lane should be presented.
     SelectDisplayLane(u16),
+    /// Request a debug snapshot for the given kernel group.
+    DebugSnapshot(u16),
+    /// Request a memory window from the kernel.
+    DebugMem {
+        group: u16,
+        space: MemSpace,
+        base: u16,
+        len: u16,
+    },
+    /// Step a number of CPU instructions.
+    DebugStepInstruction { group: u16, count: u32 },
+    /// Step the kernel forward by exactly one frame.
+    DebugStepFrame(u16),
 }
 
 impl Intent {
@@ -53,6 +68,10 @@ impl Intent {
             Intent::SetSpeed(_) => IntentPriority::P0,
             Intent::LoadRom { .. } => IntentPriority::P0,
             Intent::SelectDisplayLane(_) => IntentPriority::P1,
+            Intent::DebugSnapshot(_) => IntentPriority::P1,
+            Intent::DebugMem { .. } => IntentPriority::P1,
+            Intent::DebugStepInstruction { .. } => IntentPriority::P0,
+            Intent::DebugStepFrame(_) => IntentPriority::P0,
         }
     }
 }
@@ -77,6 +96,7 @@ impl WorkCmd {
             WorkCmd::Kernel(KernelCmd::LoadRom { .. }) => SubmitPolicy::Lossless,
             WorkCmd::Kernel(KernelCmd::SetInputs { .. }) => SubmitPolicy::Lossless,
             WorkCmd::Kernel(KernelCmd::Terminate { .. }) => SubmitPolicy::Lossless,
+            WorkCmd::Kernel(KernelCmd::Debug(cmd)) => cmd.submit_policy(),
             WorkCmd::Fs(FsCmd::Persist { .. }) => SubmitPolicy::Coalesce,
         }
     }
