@@ -80,6 +80,33 @@ fn expected_expr(expected: &Expected) -> String {
 }
 
 fn main() -> Result<()> {
+    if env::var("GBX_SKIP_TESTROMS").is_ok() {
+        println!("cargo:warning=Skipping test ROM vendoring (GBX_SKIP_TESTROMS set)");
+        let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+        let rom_out_dir = out_dir.join("roms");
+        fs::create_dir_all(&rom_out_dir)?;
+
+        let generated_path = out_dir.join("generated.rs");
+        let stub = r#"
+use crate::types::{Expected, RomKind, RomMeta, RomModel};
+
+pub(crate) const SOURCE_BUNDLE: &str = "skipped";
+pub(crate) const SOURCE_VENDOR: &str = "skipped";
+pub(crate) const SOURCE_URL: &str = "";
+
+pub(crate) static ROMS: &[RomMeta] = &[];
+
+#[cfg(feature = "embed")]
+pub(crate) static EMBED_DATA: &[(&str, &[u8])] = &[];
+"#;
+        fs::write(&generated_path, stub)?;
+        println!(
+            "cargo:rustc-env=TESTDATA_DATA_DIR={}",
+            rom_out_dir.to_string_lossy()
+        );
+        return Ok(());
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let manifest_path = manifest_dir.join("roms.index.toml");
     println!("cargo:rerun-if-changed={}", manifest_path.display());

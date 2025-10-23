@@ -17,7 +17,8 @@
   - Tests: `bash scripts/tasks/run.sh test:workspace`
   - Goldens: `bash scripts/tasks/run.sh test:golden`
   - Fast PR suite: `bash scripts/tasks/run.sh test:fast`
-  - WASM smoke (headless): `bash scripts/tasks/run.sh test:wasm-smoke`
+  - WASM node smoke (no browser): `bash scripts/tasks/run.sh test:wasm-light`
+  - Full WASM smoke (headless browser): `bash scripts/tasks/run.sh test:wasm-smoke`
   - Demo smoke: `bash scripts/tasks/run.sh test:demo`
   - Cloud parity slice: `bash scripts/tasks/run.sh ci-parity`
 - `devenv tasks run <task>` still works and delegates to the same script; add future workflows by extending `scripts/tasks/run.sh`.

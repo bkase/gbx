@@ -45,6 +45,10 @@ with_rustup_toolchain() {
 
 assets_testroms() {
   set -euo pipefail
+  if [ "${SKIP_TESTROMS:-0}" = "1" ] || [ -n "${GBX_SKIP_TESTROMS:-}" ]; then
+    note "Skipping test ROM download (SKIP_TESTROMS/GBX_SKIP_TESTROMS set)"
+    return 0
+  fi
   local dest="third_party/testroms/c-sp-v7.0"
   if [ -d "$dest/mooneye-test-suite" ]; then
     return 0
@@ -160,10 +164,9 @@ test_wasm_smoke() {
 }
 
 test_wasm_light() {
-  local wasm_port; wasm_port="$(calc_port)"
-  note "wasm light on port $wasm_port"
-  npm install --silent >/dev/null
-  bash scripts/run-browser-test.sh tests/wasm "$wasm_port" tests/wasm_browser_test.js
+  note "wasm node smoke test"
+  build_fabric_worker_wasm
+  node tests/wasm_node_smoke.js web/pkg/fabric_worker_wasm_bg.wasm
 }
 
 test_demo() {

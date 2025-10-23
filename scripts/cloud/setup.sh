@@ -132,10 +132,13 @@ install_nextest_binary() {
   local os="$(uname -s)"
   local arch="$(uname -m)"
   local tarball=""
+  local folder=""
   if [ "$os" = "Linux" ] && [ "$arch" = "x86_64" ]; then
     tarball="cargo-nextest-v${version}-x86_64-unknown-linux-gnu.tar.gz"
+    folder="cargo-nextest-v${version}-x86_64-unknown-linux-gnu"
   elif [ "$os" = "Linux" ] && [ "$arch" = "aarch64" ]; then
     tarball="cargo-nextest-v${version}-aarch64-unknown-linux-gnu.tar.gz"
+    folder="cargo-nextest-v${version}-aarch64-unknown-linux-gnu"
   else
     return 1
   fi
@@ -143,9 +146,13 @@ install_nextest_binary() {
   local tmpdir; tmpdir="$(mktemp -d)"
   curl -fsSL "$url" -o "$tmpdir/nextest.tar.gz"
   tar -xzf "$tmpdir/nextest.tar.gz" -C "$tmpdir"
-  find "$tmpdir" -name cargo-nextest -type f -exec install -m 0755 {} "$BIN_DIR/cargo-nextest" \;
+  if [ -f "$tmpdir/$folder/cargo-nextest" ]; then
+    install -m 0755 "$tmpdir/$folder/cargo-nextest" "$BIN_DIR/cargo-nextest"
+    note "Installed cargo-nextest v${version} binary."
+  else
+    return 1
+  fi
   rm -rf "$tmpdir"
-  note "Installed cargo-nextest v${version} binary."
 }
 
 install_wasm_tools_binary() {
@@ -192,6 +199,15 @@ ensure_cli_tools() {
     rm -rf "$tmp_dir"
   }
   rm -rf "$HOME/.cargo/registry/index" "$HOME/.cargo/registry/cache" "$HOME/.cargo/git"
+  for cmd in wasm-pack cargo-nextest wasm-tools; do
+    if have "$cmd"; then
+      local path
+      path="$(command -v "$cmd")"
+      note "Using $path"
+    else
+      note "Warning: $cmd not installed"
+    fi
+  done
 }
 
 npm_bootstrap() {
