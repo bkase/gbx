@@ -184,7 +184,11 @@ ci_parity() {
   lint_workspace
   build_workspace
   build_wasm_app
-  test_fast
+  if [ -n "${GBX_SKIP_TESTROMS:-}" ]; then
+    note "Skipping nextest fast suite (GBX_SKIP_TESTROMS set)"
+  else
+    test_fast
+  fi
   test_wasm_light
 }
 

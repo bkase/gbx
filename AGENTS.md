@@ -23,6 +23,7 @@
   - Cloud parity slice: `bash scripts/tasks/run.sh ci-parity`
 - `devenv tasks run <task>` still works and delegates to the same script; add future workflows by extending `scripts/tasks/run.sh`.
 - **Always enter `devenv shell` for wasm builds/tests.** The shared-memory/atomics linker flags now live only in `devenv.nix`; invoking `cargo build --target wasm32-unknown-unknown` outside the shell will produce an incompatible artifact.
+- For ultra-light cloud runs, export `GBX_SKIP_TESTROMS=1` (skips downloading large ROM bundles and generates stub metadata) and rely on `test:wasm-light` for Node-only wasm smoke checks.
 
 ## Collaboration Workflow
 - Expect concurrent teammates in this workspace; keep your edits scoped so parallel sessions do not conflict.

@@ -88,7 +88,7 @@ fn main() -> Result<()> {
 
         let generated_path = out_dir.join("generated.rs");
         let stub = r#"
-use crate::types::{Expected, RomKind, RomMeta, RomModel};
+use crate::types::RomMeta;
 
 pub(crate) const SOURCE_BUNDLE: &str = "skipped";
 pub(crate) const SOURCE_VENDOR: &str = "skipped";
