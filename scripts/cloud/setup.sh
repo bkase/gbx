@@ -21,9 +21,18 @@ case ":$PATH:" in
 esac
 export PATH
 export DEBIAN_FRONTEND=noninteractive
+TMP_ROOT="$HOME/.tmp"
+mkdir -p "$TMP_ROOT"
 
 note() { printf "\033[1;34m[setup]\033[0m %s\n" "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
+maybe_sudo() {
+  if command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    "$@"
+  fi
+}
 
 persist_env() {
   if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
@@ -49,19 +58,19 @@ persist_env() {
 
 apt_install_basics() {
   if have apt-get; then
-    sudo apt-get update -y
-    sudo apt-get install -y curl unzip ca-certificates python3 git gnupg
-    sudo apt-get install -y chromium || true
+    maybe_sudo apt-get update -y
+    maybe_sudo apt-get install -y curl unzip ca-certificates python3 git gnupg
+    maybe_sudo apt-get install -y chromium || true
     if ! have chromium && ! have chromium-browser && ! have google-chrome; then
       note "Installing Google Chrome (fallback)"
-      curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-linux.gpg
+      curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | maybe_sudo gpg --dearmor -o /usr/share/keyrings/google-linux.gpg
       echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-linux.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
-        | sudo tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
-      sudo apt-get update -y
-      sudo apt-get install -y google-chrome-stable || true
+        | maybe_sudo tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
+      maybe_sudo apt-get update -y
+      maybe_sudo apt-get install -y google-chrome-stable || true
     fi
-    sudo apt-get clean
-    sudo rm -rf /var/lib/apt/lists/*
+    maybe_sudo apt-get clean
+    maybe_sudo rm -rf /var/lib/apt/lists/*
   fi
 }
 
@@ -112,6 +121,7 @@ install_wasm_pack_binary() {
   tar -xzf "$tmpdir/wasm-pack.tar.gz" -C "$tmpdir"
   install -m 0755 "$tmpdir/$folder/wasm-pack" "$BIN_DIR/wasm-pack"
   rm -rf "$tmpdir"
+  note "Installed wasm-pack v${version} binary."
 }
 
 install_nextest_binary() {
@@ -135,24 +145,49 @@ install_nextest_binary() {
   tar -xzf "$tmpdir/nextest.tar.gz" -C "$tmpdir"
   find "$tmpdir" -name cargo-nextest -type f -exec install -m 0755 {} "$BIN_DIR/cargo-nextest" \;
   rm -rf "$tmpdir"
+  note "Installed cargo-nextest v${version} binary."
+}
+
+install_wasm_tools_binary() {
+  if have wasm-tools; then
+    return
+  fi
+  local version="1.221.1"
+  local os="$(uname -s)"
+  local arch="$(uname -m)"
+  local tarball=""
+  if [ "$os" = "Linux" ] && [ "$arch" = "x86_64" ]; then
+    tarball="wasm-tools-${version}-x86_64-linux.tar.xz"
+  elif [ "$os" = "Linux" ] && [ "$arch" = "aarch64" ]; then
+    tarball="wasm-tools-${version}-aarch64-linux.tar.xz"
+  else
+    return 1
+  fi
+  local url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${version}/${tarball}"
+  local tmpdir; tmpdir="$(mktemp -d)"
+  curl -fsSL "$url" -o "$tmpdir/wasm-tools.tar.xz"
+  tar -xf "$tmpdir/wasm-tools.tar.xz" -C "$tmpdir"
+  find "$tmpdir" -name wasm-tools -type f -exec install -m 0755 {} "$BIN_DIR/wasm-tools" \;
+  rm -rf "$tmpdir"
+  note "Installed wasm-tools v${version} binary."
 }
 
 ensure_cli_tools() {
   install_wasm_pack_binary || {
     local tmp_dir
-    tmp_dir="$(mktemp -d)"
+    tmp_dir="$(mktemp -d "${TMP_ROOT}/wasm-pack.XXXXXX")"
     CARGO_TARGET_DIR="$tmp_dir" cargo install --locked wasm-pack || true
     rm -rf "$tmp_dir"
   }
   install_nextest_binary || {
     local tmp_dir
-    tmp_dir="$(mktemp -d)"
+    tmp_dir="$(mktemp -d "${TMP_ROOT}/nextest.XXXXXX")"
     CARGO_TARGET_DIR="$tmp_dir" cargo install --locked cargo-nextest || true
     rm -rf "$tmp_dir"
   }
-  {
+  install_wasm_tools_binary || {
     local tmp_dir
-    tmp_dir="$(mktemp -d)"
+    tmp_dir="$(mktemp -d "${TMP_ROOT}/wasm-tools.XXXXXX")"
     CARGO_TARGET_DIR="$tmp_dir" cargo install --locked wasm-tools || true
     rm -rf "$tmp_dir"
   }
