@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(missing_docs)]
+#![feature(portable_simd)]
 
 mod instance;
 mod sink_transport;
@@ -7,7 +8,7 @@ mod sink_transport;
 use crate::instance::{AnyCore, Instance};
 use crate::sink_transport::TransportFrameSink;
 use kernel_core::ppu_stub::CYCLES_PER_FRAME;
-use kernel_core::{BusScalar, Core, CoreConfig, Model};
+use kernel_core::{BusScalar, BusSimd, Core, CoreConfig, Model, SimdCore};
 use service_abi::{
     DebugCmd, DebugRep, FrameSpan, KernelCmd, KernelRep, KernelServiceHandle, Service, StepKind,
     SubmitOutcome, SubmitPolicy, TickPurpose,
@@ -65,18 +66,43 @@ impl KernelFarm {
 
     fn ensure_instance(&mut self, id: u16) -> &mut Instance {
         if !self.instances.contains_key(&id) {
-            let mut core = Core::new(
-                BusScalar::new(Arc::clone(&self.blank_rom)),
-                self.core_config,
-                Model::Dmg,
-            );
-            core.reset_post_boot(Model::Dmg);
             let sink = TransportFrameSink::new(
                 Arc::clone(&self.frame_pool),
                 self.core_config.frame_width,
                 self.core_config.frame_height,
             );
-            self.instances.insert(id, Instance::new_scalar(core, sink));
+            let lanes = self.core_config.lanes.get();
+            let instance = match lanes {
+                1 => {
+                    let mut core = Core::new(
+                        BusScalar::new(Arc::clone(&self.blank_rom)),
+                        self.core_config,
+                        Model::Dmg,
+                    );
+                    core.reset_post_boot(Model::Dmg);
+                    Instance::new_scalar(core, sink)
+                }
+                2 => {
+                    let mut core = SimdCore::<2>::new(
+                        BusSimd::new(Arc::clone(&self.blank_rom)),
+                        self.core_config,
+                        Model::Dmg,
+                    );
+                    core.reset_post_boot(Model::Dmg);
+                    Instance::new_simd2(core, sink)
+                }
+                4 => {
+                    let mut core = SimdCore::<4>::new(
+                        BusSimd::new(Arc::clone(&self.blank_rom)),
+                        self.core_config,
+                        Model::Dmg,
+                    );
+                    core.reset_post_boot(Model::Dmg);
+                    Instance::new_simd4(core, sink)
+                }
+                _ => panic!("unsupported SIMD lane count {}", lanes),
+            };
+            self.instances.insert(id, instance);
         }
         self.instances.get_mut(&id).expect("instance exists")
     }
@@ -93,6 +119,8 @@ impl KernelFarm {
                 .saturating_mul(4);
             if let Some(span) = sink.produce_frame(expected_len, |buf| match core {
                 AnyCore::Scalar(core) => core.take_frame(buf),
+                AnyCore::Simd2(core) => core.take_frame(buf),
+                AnyCore::Simd4(core) => core.take_frame(buf),
             }) {
                 let frame_id = inst.bump_frame_id();
                 out.push(KernelRep::LaneFrame {
@@ -122,7 +150,7 @@ impl KernelFarm {
         }
         out.push(KernelRep::TickDone {
             group: id,
-            lanes_mask: 0b1,
+            lanes_mask: ((1u32 << inst.lanes.get()) - 1),
             cycles_done: cycles,
         });
         cycles

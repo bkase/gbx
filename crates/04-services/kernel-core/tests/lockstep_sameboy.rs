@@ -67,7 +67,7 @@ struct OurCore {
 
 impl OurCore {
     fn new(rom: Arc<[u8]>) -> Self {
-        let mut core = Core::from_rom(rom);
+        let mut core = Core::<Scalar, BusScalar>::from_rom(rom);
         core.reset_post_boot(Model::Dmg);
         Self {
             core,

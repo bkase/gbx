@@ -33,6 +33,7 @@ in {
 
   env = {
     CARGO_TERM_COLOR = "always";
+    RUSTUP_TOOLCHAIN = "nightly-2025-10-16";
     # Property test defaults for fast lane (bounded)
     PROPTEST_CASES = "32";
     PROPTEST_TIMEOUT = "2000"; # ms for the whole property test

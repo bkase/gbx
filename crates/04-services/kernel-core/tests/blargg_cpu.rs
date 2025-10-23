@@ -1,6 +1,6 @@
 //! Blargg Game Boy CPU instruction acceptance tests executed against the scalar core.
 
-use kernel_core::{Core, Exec, Scalar};
+use kernel_core::{BusScalar, Core, Exec, Scalar};
 use testdata::{self, Expected};
 
 const STEP_BUDGET: u32 = 1_000_000;
@@ -12,7 +12,7 @@ fn run_serial_rom(path: &str, max_cycles: u64) -> (String, u64) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(max_cycles);
     let rom = testdata::bytes(path);
-    let mut core: Core<Scalar, _> = Core::from_rom(rom);
+    let mut core = Core::<Scalar, BusScalar>::from_rom(rom);
     let mut serial = String::new();
     let mut elapsed = 0u64;
 

@@ -1,9 +1,13 @@
 use crate::bus::{Bus, BusScalar, InterruptCtrl, SerialIo};
+use crate::bus_simd::BusSimd;
 use crate::cpu::Cpu;
 use crate::exec::{Exec, Scalar};
+use crate::exec_simd::SimdExec;
 use crate::instr::{self, AluOp};
 use crate::ppu_stub::{PpuFrameSource, PpuIo, PpuStub};
 use crate::timers::{TimerIo, Timers};
+use core::simd::{LaneCount, SupportedLaneCount};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 /// Hardware model variants supported by the core.
@@ -20,6 +24,8 @@ pub struct CoreConfig {
     pub frame_width: u16,
     /// Height of the output frame in pixels.
     pub frame_height: u16,
+    /// Number of SIMD lanes the core should drive.
+    pub lanes: NonZeroUsize,
 }
 
 impl Default for CoreConfig {
@@ -27,6 +33,7 @@ impl Default for CoreConfig {
         Self {
             frame_width: 160,
             frame_height: 144,
+            lanes: NonZeroUsize::new(1).expect("non-zero"),
         }
     }
 }
@@ -463,5 +470,26 @@ impl Core<Scalar, BusScalar> {
     pub fn load_rom(&mut self, rom: Arc<[u8]>) {
         self.bus.load_rom(rom);
         self.cpu.pc = <Scalar as Exec>::from_u16(0x0100);
+    }
+}
+
+impl<const LANES: usize> Core<SimdExec<LANES>, BusSimd<LANES>>
+where
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    /// Convenience constructor using the SIMD bus.
+    pub fn from_rom(rom: Arc<[u8]>) -> Self {
+        let config = CoreConfig {
+            lanes: NonZeroUsize::new(LANES).expect("SIMD lanes must be non-zero"),
+            ..CoreConfig::default()
+        };
+        let bus = BusSimd::new(rom);
+        Self::new(bus, config, Model::Dmg)
+    }
+
+    /// Replaces the cartridge ROM for every SIMD lane.
+    pub fn load_rom(&mut self, rom: Arc<[u8]>) {
+        self.bus.load_rom(rom);
+        self.cpu.pc = <SimdExec<LANES> as Exec>::from_u16(0x0100);
     }
 }
