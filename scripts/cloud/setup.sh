@@ -208,6 +208,12 @@ ensure_cli_tools() {
       note "Warning: $cmd not installed"
     fi
   done
+  for cmd in wasm-pack cargo-nextest wasm-tools; do
+    if ! have "$cmd"; then
+      note "Error: required tool $cmd is unavailable after setup"
+      exit 1
+    fi
+  done
 }
 
 npm_bootstrap() {
