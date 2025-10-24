@@ -5,8 +5,8 @@
 //! helper routines to keep that match manageable while preserving a scalar-friendly
 //! control flow.
 
-use crate::bus::{Bus, InterruptCtrl};
-use crate::core::Core;
+use crate::bus::InterruptCtrl;
+use crate::core::{Core, CoreBus};
 use crate::exec::{Exec, Flags};
 use crate::timers::TimerIo;
 /// Execution cost for common instruction classes.
@@ -69,7 +69,7 @@ pub fn op_unimplemented() -> u32 {
 
 /// Reads an 8-bit operand referred to by the register selector encoding.
 #[inline(always)]
-pub fn read_r8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, code: u8) -> (E::U8, u32) {
+pub fn read_r8<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, code: u8) -> (E::U8, u32) {
     match code & 0x07 {
         0 => (core.cpu.b, 0),
         1 => (core.cpu.c, 0),
@@ -78,7 +78,7 @@ pub fn read_r8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, code: u8) -> (E::U8, u
         4 => (core.cpu.h, 0),
         5 => (core.cpu.l, 0),
         6 => {
-            let value = core.bus.read8(core.cpu.hl());
+            let value = core.read8(core.cpu.hl());
             (value, CycleCost::Clocks4.as_u32())
         }
         7 => (core.cpu.a, 0),
@@ -88,7 +88,7 @@ pub fn read_r8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, code: u8) -> (E::U8, u
 
 /// Writes an 8-bit operand to the register or memory target specified by the encoding.
 #[inline(always)]
-pub fn write_r8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, code: u8, value: E::U8) -> u32 {
+pub fn write_r8<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, code: u8, value: E::U8) -> u32 {
     match code & 0x07 {
         0 => {
             core.cpu.b = value;
@@ -116,7 +116,7 @@ pub fn write_r8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, code: u8, value: E::U
         }
         6 => {
             let addr = core.cpu.hl();
-            core.bus.write8(addr, value);
+            core.write8(addr, value);
             CycleCost::Clocks4.as_u32()
         }
         7 => {
@@ -140,7 +140,7 @@ pub fn cond<E: Exec>(flags: &Flags<<E as Exec>::Mask>, cc: u8) -> bool {
 }
 
 #[inline(always)]
-fn alu_assign<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, operand: E::U8, op: AluOp) {
+fn alu_assign<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, operand: E::U8, op: AluOp) {
     match op {
         AluOp::Add => {
             let result = E::add8(core.cpu.a, operand, false, &mut core.cpu.f);
@@ -190,8 +190,8 @@ fn alu_assign<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, operand: E::U8, op: Alu
 
 /// Loads a 16-bit immediate into one of the register pairs.
 #[inline(always)]
-pub fn op_ld_rr_d16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
-    let imm = core.cpu.fetch16(&mut core.bus);
+pub fn op_ld_rr_d16<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
+    let imm = core.fetch_imm16();
     match rp & 0x03 {
         0 => core.cpu.set_bc(imm),
         1 => core.cpu.set_de(imm),
@@ -204,112 +204,112 @@ pub fn op_ld_rr_d16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
 
 /// Stores accumulator into the memory location pointed by a register pair.
 #[inline(always)]
-pub fn op_ld_mem_rr_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
+pub fn op_ld_mem_rr_a<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
     let addr = match rp & 0x03 {
         0 => core.cpu.bc(),
         1 => core.cpu.de(),
         _ => unreachable!(),
     };
     let value = core.cpu.a;
-    core.bus.write8(addr, value);
+    core.write8(addr, value);
     CycleCost::Clocks8.as_u32()
 }
 
 /// Loads the accumulator from the memory location pointed by a register pair.
 #[inline(always)]
-pub fn op_ld_a_mem_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
+pub fn op_ld_a_mem_rr<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
     let addr = match rp & 0x03 {
         0 => core.cpu.bc(),
         1 => core.cpu.de(),
         _ => unreachable!(),
     };
-    core.cpu.a = core.bus.read8(addr);
+    core.cpu.a = core.read8(addr);
     CycleCost::Clocks8.as_u32()
 }
 
 /// Loads an immediate byte into a register or `(HL)` target.
 #[inline(always)]
-pub fn op_ld_r_d8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, dst: u8) -> u32 {
-    let imm = core.cpu.fetch8(&mut core.bus);
+pub fn op_ld_r_d8<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, dst: u8) -> u32 {
+    let imm = core.fetch_imm8();
     let extra = write_r8(core, dst, imm);
     CycleCost::Clocks8.as_u32() + extra
 }
 
 /// Stores an immediate byte into `(HL)`.
 #[inline(always)]
-pub fn op_ld_hl_d8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let imm = core.cpu.fetch8(&mut core.bus);
+pub fn op_ld_hl_d8<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let imm = core.fetch_imm8();
     let addr = core.cpu.hl();
-    core.bus.write8(addr, imm);
+    core.write8(addr, imm);
     CycleCost::Clocks12.as_u32()
 }
 
 /// Stores the stack pointer to an absolute address.
 #[inline(always)]
-pub fn op_ld_mem_a16_sp<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let addr = core.cpu.fetch16(&mut core.bus);
+pub fn op_ld_mem_a16_sp<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let addr = core.fetch_imm16();
     let sp = core.cpu.sp;
     let (hi, lo) = E::split_u16(sp);
-    core.bus.write8(addr, lo);
+    core.write8(addr, lo);
     let next_addr = E::from_u16(E::to_u16(addr).wrapping_add(1));
-    core.bus.write8(next_addr, hi);
+    core.write8(next_addr, hi);
     CycleCost::Clocks20.as_u32()
 }
 
 /// Writes the accumulator to the high-memory IO space using an immediate offset.
 #[inline(always)]
-pub fn op_ldh_a8_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let offset = core.cpu.fetch8(&mut core.bus);
+pub fn op_ldh_a8_a<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let offset = core.fetch_imm8();
     let addr = E::from_u16(0xFF00 | u16::from(E::to_u8(offset)));
-    core.bus.write8(addr, core.cpu.a);
+    core.write8(addr, core.cpu.a);
     CycleCost::Clocks12.as_u32()
 }
 
 /// Reads the accumulator from the high-memory IO space using an immediate offset.
 #[inline(always)]
-pub fn op_ldh_a_a8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let offset = core.cpu.fetch8(&mut core.bus);
+pub fn op_ldh_a_a8<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let offset = core.fetch_imm8();
     let addr = E::from_u16(0xFF00 | u16::from(E::to_u8(offset)));
-    let value = core.bus.read8(addr);
+    let value = core.read8(addr);
     core.cpu.a = value;
     CycleCost::Clocks12.as_u32()
 }
 
 /// Writes the accumulator to the high-memory IO space using register `C`.
 #[inline(always)]
-pub fn op_ldh_c_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ldh_c_a<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = E::from_u16(0xFF00 | u16::from(E::to_u8(core.cpu.c)));
-    core.bus.write8(addr, core.cpu.a);
+    core.write8(addr, core.cpu.a);
     CycleCost::Clocks8.as_u32()
 }
 
 /// Reads the accumulator from the high-memory IO space using register `C`.
 #[inline(always)]
-pub fn op_ldh_a_c<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ldh_a_c<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = E::from_u16(0xFF00 | u16::from(E::to_u8(core.cpu.c)));
-    core.cpu.a = core.bus.read8(addr);
+    core.cpu.a = core.read8(addr);
     CycleCost::Clocks8.as_u32()
 }
 
 /// Loads the accumulator from an absolute 16-bit address.
 #[inline(always)]
-pub fn op_ld_a_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let addr = core.cpu.fetch16(&mut core.bus);
-    core.cpu.a = core.bus.read8(addr);
+pub fn op_ld_a_a16<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let addr = core.fetch_imm16();
+    core.cpu.a = core.read8(addr);
     CycleCost::Clocks16.as_u32()
 }
 
 /// Stores the accumulator to an absolute 16-bit address.
 #[inline(always)]
-pub fn op_ld_a16_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let addr = core.cpu.fetch16(&mut core.bus);
-    core.bus.write8(addr, core.cpu.a);
+pub fn op_ld_a16_a<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let addr = core.fetch_imm16();
+    core.write8(addr, core.cpu.a);
     CycleCost::Clocks16.as_u32()
 }
 
 /// Copies a register value to another register or `(HL)`.
 #[inline(always)]
-pub fn op_ld_r_r<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+pub fn op_ld_r_r<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
     let dst = (opcode >> 3) & 0x07;
     let src = opcode & 0x07;
     let (value, read_cycles) = read_r8(core, src);
@@ -319,13 +319,13 @@ pub fn op_ld_r_r<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
 
 /// Increments an 8-bit register or memory location.
 #[inline(always)]
-pub fn op_inc_r<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, idx: u8) -> u32 {
+pub fn op_inc_r<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, idx: u8) -> u32 {
     match idx & 0x07 {
         6 => {
             let addr = core.cpu.hl();
-            let value = core.bus.read8(addr);
+            let value = core.read8(addr);
             let (result, _) = core.inc_reg(value);
-            core.bus.write8(addr, result);
+            core.write8(addr, result);
             CycleCost::Clocks12.as_u32()
         }
         0 => {
@@ -369,13 +369,13 @@ pub fn op_inc_r<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, idx: u8) -> u32 {
 
 /// Decrements an 8-bit register or memory location.
 #[inline(always)]
-pub fn op_dec_r<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, idx: u8) -> u32 {
+pub fn op_dec_r<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, idx: u8) -> u32 {
     match idx & 0x07 {
         6 => {
             let addr = core.cpu.hl();
-            let value = core.bus.read8(addr);
+            let value = core.read8(addr);
             let (result, _) = core.dec_reg(value);
-            core.bus.write8(addr, result);
+            core.write8(addr, result);
             CycleCost::Clocks12.as_u32()
         }
         0 => {
@@ -419,7 +419,7 @@ pub fn op_dec_r<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, idx: u8) -> u32 {
 
 /// Increments a 16-bit register pair.
 #[inline(always)]
-pub fn op_inc_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
+pub fn op_inc_rr<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
     match rp & 0x03 {
         0 => {
             let (value, cycles) = core.inc16(core.cpu.bc());
@@ -447,7 +447,7 @@ pub fn op_inc_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
 
 /// Decrements a 16-bit register pair.
 #[inline(always)]
-pub fn op_dec_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
+pub fn op_dec_rr<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
     match rp & 0x03 {
         0 => {
             let (value, cycles) = core.dec16(core.cpu.bc());
@@ -475,7 +475,7 @@ pub fn op_dec_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
 
 /// Adds a register pair to HL.
 #[inline(always)]
-pub fn op_add_hl_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
+pub fn op_add_hl_rr<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
     let rhs = match rp & 0x03 {
         0 => core.cpu.bc(),
         1 => core.cpu.de(),
@@ -488,8 +488,8 @@ pub fn op_add_hl_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
 
 /// Adds a signed immediate value to SP.
 #[inline(always)]
-pub fn op_add_sp_e8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let imm = core.cpu.fetch8(&mut core.bus);
+pub fn op_add_sp_e8<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let imm = core.fetch_imm8();
     let (result, h, c) = core.add_sp_e8(imm);
     core.cpu.sp = result;
     core.cpu.f.set_z(false);
@@ -501,8 +501,8 @@ pub fn op_add_sp_e8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Computes `HL = SP + e8` while updating flags.
 #[inline(always)]
-pub fn op_ld_hl_sp_plus_e8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let imm = core.cpu.fetch8(&mut core.bus);
+pub fn op_ld_hl_sp_plus_e8<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let imm = core.fetch_imm8();
     let (result, h, c) = core.add_sp_e8(imm);
     core.cpu.set_hl(result);
     core.cpu.f.set_z(false);
@@ -514,16 +514,16 @@ pub fn op_ld_hl_sp_plus_e8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Copies HL into SP.
 #[inline(always)]
-pub fn op_ld_sp_hl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ld_sp_hl<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     core.cpu.sp = core.cpu.hl();
     CycleCost::Clocks8.as_u32()
 }
 
 /// Stores `A` to `(HL)` and increments HL.
 #[inline(always)]
-pub fn op_ldi_hl_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ldi_hl_a<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = core.cpu.hl();
-    core.bus.write8(addr, core.cpu.a);
+    core.write8(addr, core.cpu.a);
     let next = E::from_u16(E::to_u16(addr).wrapping_add(1));
     core.cpu.set_hl(next);
     CycleCost::Clocks8.as_u32()
@@ -531,9 +531,9 @@ pub fn op_ldi_hl_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Loads `A` from `(HL)` and increments HL.
 #[inline(always)]
-pub fn op_ldi_a_hl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ldi_a_hl<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = core.cpu.hl();
-    let value = core.bus.read8(addr);
+    let value = core.read8(addr);
     let next = E::from_u16(E::to_u16(addr).wrapping_add(1));
     core.cpu.set_hl(next);
     core.cpu.a = value;
@@ -542,9 +542,9 @@ pub fn op_ldi_a_hl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Stores `A` to `(HL)` and then decrements HL.
 #[inline(always)]
-pub fn op_ldd_hl_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ldd_hl_a<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = core.cpu.hl();
-    core.bus.write8(addr, core.cpu.a);
+    core.write8(addr, core.cpu.a);
     let next = E::from_u16(E::to_u16(addr).wrapping_sub(1));
     core.cpu.set_hl(next);
     CycleCost::Clocks8.as_u32()
@@ -552,9 +552,9 @@ pub fn op_ldd_hl_a<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Loads `A` from `(HL)` and then decrements HL.
 #[inline(always)]
-pub fn op_ldd_a_hl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ldd_a_hl<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = core.cpu.hl();
-    let value = core.bus.read8(addr);
+    let value = core.read8(addr);
     let next = E::from_u16(E::to_u16(addr).wrapping_sub(1));
     core.cpu.set_hl(next);
     core.cpu.a = value;
@@ -563,16 +563,16 @@ pub fn op_ldd_a_hl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Performs an unconditional relative jump.
 #[inline(always)]
-pub fn op_jr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let off = core.cpu.fetch8(&mut core.bus);
+pub fn op_jr<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let off = core.fetch_imm8();
     core.jump_relative(off, true);
     CycleCost::Clocks12.as_u32()
 }
 
 /// Performs a conditional relative jump.
 #[inline(always)]
-pub fn op_jr_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
-    let off = core.cpu.fetch8(&mut core.bus);
+pub fn op_jr_cc<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+    let off = core.fetch_imm8();
     let cc = (opcode >> 3) & 0x03;
     let taken = cond::<E>(&core.cpu.f, cc);
     core.jump_relative(off, taken);
@@ -585,7 +585,7 @@ pub fn op_jr_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
 
 /// Executes an ALU operation on `A` with a register or `(HL)` operand.
 #[inline(always)]
-pub fn op_alu_a_r<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8, op: AluOp) -> u32 {
+pub fn op_alu_a_r<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, opcode: u8, op: AluOp) -> u32 {
     let (operand, read_cycles) = read_r8(core, opcode);
     alu_assign(core, operand, op);
     CycleCost::Clocks4.as_u32() + read_cycles
@@ -593,15 +593,15 @@ pub fn op_alu_a_r<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8, op: Alu
 
 /// Executes an ALU operation on `A` with an immediate operand.
 #[inline(always)]
-pub fn op_alu_a_d8<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, op: AluOp) -> u32 {
-    let imm = core.cpu.fetch8(&mut core.bus);
+pub fn op_alu_a_d8<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, op: AluOp) -> u32 {
+    let imm = core.fetch_imm8();
     alu_assign(core, imm, op);
     CycleCost::Clocks8.as_u32()
 }
 
 /// Rotates `A` left without carry and clears `Z`.
 #[inline(always)]
-pub fn op_rlca<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_rlca<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let value = E::to_u8(core.cpu.a);
     let carry = value >> 7;
     let result = (value << 1) | carry;
@@ -615,7 +615,7 @@ pub fn op_rlca<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Rotates `A` left through the carry flag.
 #[inline(always)]
-pub fn op_rla<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_rla<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let value = E::to_u8(core.cpu.a);
     let carry_in = core.cpu.f.c() as u8;
     let carry_out = value >> 7;
@@ -630,7 +630,7 @@ pub fn op_rla<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Rotates `A` right without carry and clears `Z`.
 #[inline(always)]
-pub fn op_rrca<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_rrca<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let value = E::to_u8(core.cpu.a);
     let carry = value & 0x01;
     let result = (value >> 1) | (carry << 7);
@@ -644,7 +644,7 @@ pub fn op_rrca<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Rotates `A` right through the carry flag.
 #[inline(always)]
-pub fn op_rra<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_rra<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let value = E::to_u8(core.cpu.a);
     let carry_in = if core.cpu.f.c() { 1 } else { 0 };
     let carry_out = value & 0x01;
@@ -659,7 +659,7 @@ pub fn op_rra<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Adjusts `A` for binary-coded decimal representation.
 #[inline(always)]
-pub fn op_daa<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_daa<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let mut a = E::to_u8(core.cpu.a);
     let mut carry = core.cpu.f.c();
 
@@ -689,7 +689,7 @@ pub fn op_daa<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Complements the accumulator.
 #[inline(always)]
-pub fn op_cpl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_cpl<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let value = E::to_u8(core.cpu.a) ^ 0xFF;
     core.cpu.a = E::from_u8(value);
     core.cpu.f.set_n(true);
@@ -699,7 +699,7 @@ pub fn op_cpl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Sets the carry flag and clears `N`/`H`.
 #[inline(always)]
-pub fn op_scf<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_scf<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     core.cpu.f.set_n(false);
     core.cpu.f.set_h(false);
     core.cpu.f.set_c(true);
@@ -708,7 +708,7 @@ pub fn op_scf<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Complements the carry flag while clearing `N`/`H`.
 #[inline(always)]
-pub fn op_ccf<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ccf<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     core.cpu.f.set_n(false);
     core.cpu.f.set_h(false);
     core.cpu.f.set_c(!core.cpu.f.c());
@@ -717,7 +717,7 @@ pub fn op_ccf<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Disables interrupts immediately.
 #[inline(always)]
-pub fn op_di<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_di<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     core.cpu.ime = false;
     core.cpu.enable_ime_pending = false;
     CycleCost::Clocks4.as_u32()
@@ -725,7 +725,7 @@ pub fn op_di<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Schedules interrupts to enable after the next instruction.
 #[inline(always)]
-pub fn op_ei<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ei<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     core.cpu.enable_ime_pending = true;
     CycleCost::Clocks4.as_u32()
 }
@@ -734,10 +734,10 @@ pub fn op_ei<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 #[inline(always)]
 pub fn op_halt<E: Exec, B>(core: &mut Core<E, B>) -> u32
 where
-    B: Bus<E> + InterruptCtrl + TimerIo,
+    B: CoreBus<E> + InterruptCtrl + TimerIo,
 {
     let ie = core.bus.read_ie();
-    let if_reg = core.bus.read_if();
+    let if_reg = TimerIo::read_if(&core.bus);
     let pending = ie & if_reg & 0x1F;
 
     if core.cpu.ime || pending == 0 {
@@ -750,14 +750,14 @@ where
 
 /// Enters the STOP low-power state (treated as HALT).
 #[inline(always)]
-pub fn op_stop<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_stop<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     core.cpu.halted = true;
     CycleCost::Clocks4.as_u32()
 }
 
 /// Jumps to the address stored in HL.
 #[inline(always)]
-pub fn op_jp_hl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_jp_hl<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = core.cpu.hl();
     core.cpu.pc = addr;
     CycleCost::Clocks4.as_u32()
@@ -765,7 +765,7 @@ pub fn op_jp_hl<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Pushes a register pair onto the stack.
 #[inline(always)]
-pub fn op_push_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
+pub fn op_push_rr<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
     let value = match rp & 0x03 {
         0 => core.cpu.bc(),
         1 => core.cpu.de(),
@@ -779,7 +779,7 @@ pub fn op_push_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
 
 /// Pops a register pair from the stack.
 #[inline(always)]
-pub fn op_pop_rr<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
+pub fn op_pop_rr<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, rp: u8) -> u32 {
     let value = core.cpu.pop16(&mut core.bus);
     match rp & 0x03 {
         0 => core.cpu.set_bc(value),
@@ -850,7 +850,7 @@ fn cb_srl(value: u8) -> (u8, bool) {
 
 /// Executes the CB-prefixed rotate/shift group (`RLC`..`SRL`).
 #[inline(always)]
-fn cb_exec_rotate<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, variant: u8, z: u8) -> (u32, u32) {
+fn cb_exec_rotate<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, variant: u8, z: u8) -> (u32, u32) {
     let (value, read_cycles) = read_r8(core, z);
     let value_u8 = E::to_u8(value);
     let carry_in = core.cpu.f.c();
@@ -876,7 +876,7 @@ fn cb_exec_rotate<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, variant: u8, z: u8)
 
 /// Executes the CB-prefixed `BIT b, r` mnemonics.
 #[inline(always)]
-fn cb_exec_bit<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> u32 {
+fn cb_exec_bit<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> u32 {
     let (value, read_cycles) = read_r8(core, z);
     let result = E::to_u8(value);
     let zero = result & (1 << bit) == 0;
@@ -888,7 +888,7 @@ fn cb_exec_bit<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> u32
 
 /// Executes the CB-prefixed `RES b, r` mnemonics.
 #[inline(always)]
-fn cb_exec_res<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> (u32, u32) {
+fn cb_exec_res<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> (u32, u32) {
     let (value, read_cycles) = read_r8(core, z);
     let mut result = E::to_u8(value);
     result &= !(1 << bit);
@@ -898,7 +898,7 @@ fn cb_exec_res<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> (u3
 
 /// Executes the CB-prefixed `SET b, r` mnemonics.
 #[inline(always)]
-fn cb_exec_set<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> (u32, u32) {
+fn cb_exec_set<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> (u32, u32) {
     let (value, read_cycles) = read_r8(core, z);
     let mut result = E::to_u8(value);
     result |= 1 << bit;
@@ -908,7 +908,7 @@ fn cb_exec_set<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, bit: u8, z: u8) -> (u3
 
 /// Executes a CB-prefixed extended opcode.
 #[inline(always)]
-pub fn op_cb<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, sub: u8) -> u32 {
+pub fn op_cb<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, sub: u8) -> u32 {
     let x = sub >> 6;
     let y = (sub >> 3) & 0x07;
     let z = sub & 0x07;
@@ -936,7 +936,7 @@ pub fn op_cb<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, sub: u8) -> u32 {
 
 /// Returns from an interrupt handler and re-enables IME.
 #[inline(always)]
-pub fn op_reti<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_reti<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = core.cpu.pop16(&mut core.bus);
     core.cpu.pc = addr;
     core.cpu.ime = true;
@@ -945,7 +945,7 @@ pub fn op_reti<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Performs a restart to a fixed handler address.
 #[inline(always)]
-pub fn op_rst<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+pub fn op_rst<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
     let target = (opcode & 0x38) as u16;
     let ret = core.cpu.pc;
     core.cpu.push16(&mut core.bus, ret);
@@ -955,7 +955,7 @@ pub fn op_rst<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
 
 /// Returns conditionally from a subroutine.
 #[inline(always)]
-pub fn op_ret_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+pub fn op_ret_cc<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
     let cc = (opcode >> 3) & 0x03;
     if cond::<E>(&core.cpu.f, cc) {
         let addr = core.cpu.pop16(&mut core.bus);
@@ -968,8 +968,8 @@ pub fn op_ret_cc<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
 
 /// Performs a conditional absolute jump.
 #[inline(always)]
-pub fn op_jp_cc_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
-    let addr = core.cpu.fetch16(&mut core.bus);
+pub fn op_jp_cc_a16<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+    let addr = core.fetch_imm16();
     let cc = (opcode >> 3) & 0x03;
     if cond::<E>(&core.cpu.f, cc) {
         core.cpu.pc = addr;
@@ -981,8 +981,8 @@ pub fn op_jp_cc_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u3
 
 /// Performs a conditional subroutine call.
 #[inline(always)]
-pub fn op_call_cc_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
-    let addr = core.cpu.fetch16(&mut core.bus);
+pub fn op_call_cc_a16<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>, opcode: u8) -> u32 {
+    let addr = core.fetch_imm16();
     let cc = (opcode >> 3) & 0x03;
     if cond::<E>(&core.cpu.f, cc) {
         let ret = core.cpu.pc;
@@ -996,15 +996,15 @@ pub fn op_call_cc_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>, opcode: u8) -> 
 
 /// Performs an absolute jump.
 #[inline(always)]
-pub fn op_jp_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let addr = core.cpu.fetch16(&mut core.bus);
+pub fn op_jp_a16<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let addr = core.fetch_imm16();
     core.cpu.pc = addr;
     CycleCost::Clocks16.as_u32()
 }
 
 /// Returns from a subroutine.
 #[inline(always)]
-pub fn op_ret<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
+pub fn op_ret<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
     let addr = core.cpu.pop16(&mut core.bus);
     core.cpu.pc = addr;
     CycleCost::Clocks16.as_u32()
@@ -1012,8 +1012,8 @@ pub fn op_ret<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
 
 /// Calls a subroutine at an absolute address.
 #[inline(always)]
-pub fn op_call_a16<E: Exec, B: Bus<E>>(core: &mut Core<E, B>) -> u32 {
-    let addr = core.cpu.fetch16(&mut core.bus);
+pub fn op_call_a16<E: Exec, B: CoreBus<E>>(core: &mut Core<E, B>) -> u32 {
+    let addr = core.fetch_imm16();
     let ret = core.cpu.pc;
     core.cpu.push16(&mut core.bus, ret);
     core.cpu.pc = addr;

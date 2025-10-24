@@ -6,6 +6,10 @@ use crate::exec_simd::SimdExec;
 use crate::instr::{self, AluOp};
 use crate::ppu_stub::{PpuFrameSource, PpuIo, PpuStub};
 use crate::timers::{TimerIo, Timers};
+
+/// Bundles the bus traits required by the scalar core for timing-sensitive peripherals.
+pub trait CoreBus<E: Exec>: Bus<E> + TimerIo + InterruptCtrl + PpuIo + SerialIo {}
+impl<E: Exec, B> CoreBus<E> for B where B: Bus<E> + TimerIo + InterruptCtrl + PpuIo + SerialIo {}
 use core::simd::{LaneCount, SupportedLaneCount};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -39,7 +43,7 @@ impl Default for CoreConfig {
 }
 
 /// Combined CPU + bus + timing core parameterised by execution backend.
-pub struct Core<E: Exec, B: Bus<E>> {
+pub struct Core<E: Exec, B: CoreBus<E>> {
     /// CPU register file and scheduler state.
     pub cpu: Cpu<E>,
     /// Memory and IO bus implementation.
@@ -50,12 +54,13 @@ pub struct Core<E: Exec, B: Bus<E>> {
     pub ppu: PpuStub,
     /// Cycle budget accumulated within the current frame.
     pub cycles_this_frame: u32,
+    inline_cycle_credit: u32,
     ppu_enabled: bool,
     config: CoreConfig,
     model: Model,
 }
 
-impl<E: Exec, B: Bus<E>> Core<E, B> {
+impl<E: Exec, B: CoreBus<E>> Core<E, B> {
     /// Creates a core with the supplied bus and configuration.
     pub fn new(bus: B, config: CoreConfig, model: Model) -> Self {
         Self {
@@ -64,6 +69,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             timers: Timers::new(),
             ppu: PpuStub::new(),
             cycles_this_frame: 0,
+            inline_cycle_credit: 0,
             ppu_enabled: true,
             config,
             model,
@@ -80,6 +86,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
         self.timers.reset();
         self.ppu.reset();
         self.cycles_this_frame = 0;
+        self.inline_cycle_credit = 0;
         self.ppu_enabled = true;
         self.cpu.halted = false;
         self.cpu.enable_ime_pending = false;
@@ -108,6 +115,59 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
                 self.timers.initialize_post_boot(&mut self.bus);
             }
         }
+    }
+
+    fn consume_cycles(&mut self, cycles: u32)
+    where
+        B: TimerIo + InterruptCtrl + PpuIo + SerialIo,
+    {
+        if cycles == 0 {
+            return;
+        }
+        self.timers.step(cycles, &mut self.bus);
+        if self.ppu_enabled {
+            self.ppu.step(cycles, &mut self.bus);
+        }
+        self.bus.step_serial(cycles);
+        self.cycles_this_frame = self.cycles_this_frame.wrapping_add(cycles);
+    }
+
+    pub(crate) fn fetch_imm8(&mut self) -> E::U8
+    where
+        B: TimerIo + InterruptCtrl + PpuIo + SerialIo,
+    {
+        let byte = self.cpu.fetch8(&mut self.bus);
+        self.consume_cycles(4);
+        self.inline_cycle_credit = self.inline_cycle_credit.wrapping_add(4);
+        byte
+    }
+
+    pub(crate) fn fetch_imm16(&mut self) -> E::U16
+    where
+        B: TimerIo + InterruptCtrl + PpuIo + SerialIo,
+    {
+        let lo = self.fetch_imm8();
+        let hi = self.fetch_imm8();
+        E::combine_u16(hi, lo)
+    }
+
+    pub(crate) fn read8(&mut self, addr: E::U16) -> E::U8
+    where
+        B: TimerIo + InterruptCtrl + PpuIo + SerialIo,
+    {
+        let byte = self.bus.read8(addr);
+        self.consume_cycles(4);
+        self.inline_cycle_credit = self.inline_cycle_credit.wrapping_add(4);
+        byte
+    }
+
+    pub(crate) fn write8(&mut self, addr: E::U16, value: E::U8)
+    where
+        B: TimerIo + InterruptCtrl + PpuIo + SerialIo,
+    {
+        self.bus.write8(addr, value);
+        self.consume_cycles(4);
+        self.inline_cycle_credit = self.inline_cycle_credit.wrapping_add(4);
     }
 
     /// Returns whether the PPU reported a frame boundary.
@@ -166,29 +226,24 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
 
         let mut consumed = 0u32;
         while budget > 0 {
-            let mut cycles = self.service_interrupts();
-            if cycles == 0 {
+            let frame_before = self.cycles_this_frame;
+
+            if self.service_interrupts() == 0 {
                 if self.cpu.halted {
-                    cycles = 4u32.min(budget);
+                    let step = budget.min(4);
+                    self.consume_cycles(step);
                 } else {
-                    cycles = self.execute_opcode();
+                    self.execute_opcode();
                 }
             }
 
-            let step = cycles;
-            if step == 0 {
-                continue;
+            let delta = self.cycles_this_frame.wrapping_sub(frame_before);
+            if delta == 0 {
+                break;
             }
 
-            self.timers.step(step, &mut self.bus);
-            if self.ppu_enabled {
-                self.ppu.step(step, &mut self.bus);
-            }
-            self.bus.step_serial(step);
-            self.cycles_this_frame = self.cycles_this_frame.wrapping_add(step);
-
-            consumed = consumed.wrapping_add(step);
-            budget = budget.saturating_sub(step);
+            consumed = consumed.wrapping_add(delta);
+            budget = budget.saturating_sub(delta);
 
             if self.ppu.frame_ready() {
                 break;
@@ -204,24 +259,17 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
         B: TimerIo + InterruptCtrl + PpuIo + SerialIo,
     {
         let prev_pc = E::to_u16(self.cpu.pc);
-        let mut cycles = self.service_interrupts();
-        if cycles == 0 {
+        let frame_before = self.cycles_this_frame;
+
+        if self.service_interrupts() == 0 {
             if self.cpu.halted {
-                cycles = 4;
+                self.consume_cycles(4);
             } else {
-                cycles = self.execute_opcode();
+                self.execute_opcode();
             }
         }
 
-        if cycles != 0 {
-            self.timers.step(cycles, &mut self.bus);
-            if self.ppu_enabled {
-                self.ppu.step(cycles, &mut self.bus);
-            }
-            self.bus.step_serial(cycles);
-            self.cycles_this_frame = self.cycles_this_frame.wrapping_add(cycles);
-        }
-
+        let cycles = self.cycles_this_frame.wrapping_sub(frame_before);
         let pc = if cycles == 0 {
             prev_pc
         } else {
@@ -234,9 +282,12 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     where
         B: TimerIo + InterruptCtrl,
     {
+        self.inline_cycle_credit = 0;
         let pending_before = self.cpu.enable_ime_pending;
         let opcode = self.cpu.fetch8(&mut self.bus);
         let opcode_u8 = E::to_u8(opcode);
+        self.consume_cycles(4);
+        self.inline_cycle_credit = self.inline_cycle_credit.wrapping_add(4);
         let was_ei = opcode_u8 == 0xFB;
         let cycles = match opcode_u8 {
             0x00 => instr::op_nop(),
@@ -325,7 +376,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             0xC9 => instr::op_ret(self),
             0xC7 | 0xCF | 0xD7 | 0xDF | 0xE7 | 0xEF | 0xF7 | 0xFF => instr::op_rst(self, opcode_u8),
             0xCB => {
-                let sub = self.cpu.fetch8(&mut self.bus);
+                let sub = self.fetch_imm8();
                 instr::op_cb(self, E::to_u8(sub))
             }
             0xCD => instr::op_call_a16(self),
@@ -361,6 +412,11 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             self.cpu.ime = true;
             self.cpu.enable_ime_pending = was_ei;
         }
+        let accounted = self.inline_cycle_credit;
+        if cycles > accounted {
+            self.consume_cycles(cycles - accounted);
+        }
+        self.inline_cycle_credit = 0;
         cycles
     }
 
@@ -436,7 +492,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
     where
         B: TimerIo + InterruptCtrl,
     {
-        let pending = self.bus.read_ie() & self.bus.read_if();
+        let pending = self.bus.read_ie() & TimerIo::read_if(&self.bus);
         if pending == 0 {
             return 0;
         }
@@ -446,13 +502,14 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             self.cpu.ime = false;
             let bit = pending.trailing_zeros() as usize;
             let mask = 1u8 << bit;
-            let mut if_reg = self.bus.read_if();
+            let mut if_reg = TimerIo::read_if(&self.bus);
             if_reg &= !mask;
-            self.bus.write_if(if_reg);
+            TimerIo::write_if(&mut self.bus, if_reg);
             let pc = self.cpu.pc;
             self.cpu.push16(&mut self.bus, pc);
             const VECTORS: [u16; 5] = [0x40, 0x48, 0x50, 0x58, 0x60];
             self.cpu.pc = E::from_u16(VECTORS[bit]);
+            self.consume_cycles(20);
             20
         } else {
             if self.cpu.halted {

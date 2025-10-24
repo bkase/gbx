@@ -297,3 +297,13 @@ fn blargg_cpu_instrs_10_bit_ops_passes() {
 fn blargg_cpu_instrs_11_op_a_hl_passes() {
     assert_serial_passes_within("blargg/cpu_instrs/individual/11-op a,(hl).gb", 80_000_000);
 }
+
+#[test]
+fn blargg_instr_timing_passes() {
+    assert_serial_passes_within("blargg/instr_timing/instr_timing.gb", 80_000_000);
+}
+
+#[test]
+fn blargg_mem_timing_passes() {
+    assert_serial_passes_within("blargg/mem_timing/mem_timing.gb", 120_000_000);
+}

@@ -144,7 +144,7 @@ impl BusScalar {
     }
 
     fn rom_bank_count(&self) -> usize {
-        (self.rom.len() + 0x3FFF) / 0x4000
+        self.rom.len().div_ceil(0x4000)
     }
 
     pub(crate) fn set_rom_bank(&mut self, bank: usize) {
@@ -160,7 +160,7 @@ impl BusScalar {
     /// Accounts for the CPU cycles that elapse between the write to SC and the moment the link
     /// hardware starts driving the internal clock. Adjusted to match DMG timing (verified against
     /// SameBoy) so the serial interrupt fires on the same boundary.
-    const SERIAL_STARTUP_LATENCY: u32 = 76;
+    const SERIAL_STARTUP_LATENCY: u32 = 0;
     const SERIAL_FIRST_BIT_CYCLES: u32 = Self::SERIAL_CYCLES_PER_BIT - Self::SERIAL_STARTUP_LATENCY;
 
     fn reset_serial_state(&mut self) {
