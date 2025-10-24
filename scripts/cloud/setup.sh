@@ -117,11 +117,25 @@ install_wasm_pack_binary() {
   fi
   local url="https://github.com/rustwasm/wasm-pack/releases/download/v${version}/${tarball}"
   local tmpdir; tmpdir="$(mktemp -d)"
-  curl -fsSL "$url" -o "$tmpdir/wasm-pack.tar.gz"
-  tar -xzf "$tmpdir/wasm-pack.tar.gz" -C "$tmpdir"
+  if ! curl -fsSL "$url" -o "$tmpdir/wasm-pack.tar.gz"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! tar -xzf "$tmpdir/wasm-pack.tar.gz" -C "$tmpdir"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if [ ! -f "$tmpdir/$folder/wasm-pack" ]; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
   install -m 0755 "$tmpdir/$folder/wasm-pack" "$BIN_DIR/wasm-pack"
   rm -rf "$tmpdir"
-  note "Installed wasm-pack v${version} binary."
+  if have wasm-pack; then
+    note "Installed wasm-pack v${version} binary."
+    return 0
+  fi
+  return 1
 }
 
 install_nextest_binary() {
@@ -144,15 +158,26 @@ install_nextest_binary() {
   fi
   local url="https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-v${version}/${tarball}"
   local tmpdir; tmpdir="$(mktemp -d)"
-  curl -fsSL "$url" -o "$tmpdir/nextest.tar.gz"
-  tar -xzf "$tmpdir/nextest.tar.gz" -C "$tmpdir"
+  if ! curl -fsSL "$url" -o "$tmpdir/nextest.tar.gz"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  if ! tar -xzf "$tmpdir/nextest.tar.gz" -C "$tmpdir"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
   if [ -f "$tmpdir/$folder/cargo-nextest" ]; then
     install -m 0755 "$tmpdir/$folder/cargo-nextest" "$BIN_DIR/cargo-nextest"
     note "Installed cargo-nextest v${version} binary."
   else
+    rm -rf "$tmpdir"
     return 1
   fi
   rm -rf "$tmpdir"
+  if have cargo-nextest; then
+    return 0
+  fi
+  return 1
 }
 
 install_wasm_tools_binary() {
@@ -162,21 +187,49 @@ install_wasm_tools_binary() {
   local version="1.221.1"
   local os="$(uname -s)"
   local arch="$(uname -m)"
-  local tarball=""
-  if [ "$os" = "Linux" ] && [ "$arch" = "x86_64" ]; then
-    tarball="wasm-tools-${version}-x86_64-linux.tar.xz"
-  elif [ "$os" = "Linux" ] && [ "$arch" = "aarch64" ]; then
-    tarball="wasm-tools-${version}-aarch64-linux.tar.xz"
-  else
+  local success=0
+  local tmpdir; tmpdir="$(mktemp -d)"
+  for ext in tar.xz tar.gz; do
+    local tarball=""
+    if [ "$os" = "Linux" ] && [ "$arch" = "x86_64" ]; then
+      tarball="wasm-tools-${version}-x86_64-linux.${ext}"
+    elif [ "$os" = "Linux" ] && [ "$arch" = "aarch64" ]; then
+      tarball="wasm-tools-${version}-aarch64-linux.${ext}"
+    else
+      break
+    fi
+    local url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${version}/${tarball}"
+    local target="$tmpdir/wasm-tools.tar.${ext##*.}"
+    if curl -fsSL "$url" -o "$target"; then
+      if [ "$ext" = "tar.xz" ]; then
+        if tar -xJf "$target" -C "$tmpdir"; then
+          success=1
+          break
+        fi
+      else
+        if tar -xzf "$target" -C "$tmpdir"; then
+          success=1
+          break
+        fi
+      fi
+    fi
+  done
+  if [ "$success" -ne 1 ]; then
+    rm -rf "$tmpdir"
     return 1
   fi
-  local url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${version}/${tarball}"
-  local tmpdir; tmpdir="$(mktemp -d)"
-  curl -fsSL "$url" -o "$tmpdir/wasm-tools.tar.xz"
-  tar -xf "$tmpdir/wasm-tools.tar.xz" -C "$tmpdir"
-  find "$tmpdir" -name wasm-tools -type f -exec install -m 0755 {} "$BIN_DIR/wasm-tools" \;
+  local found=0
+  while IFS= read -r -d '' path; do
+    install -m 0755 "$path" "$BIN_DIR/wasm-tools"
+    found=1
+    break
+  done < <(find "$tmpdir" -name wasm-tools -type f -print0)
   rm -rf "$tmpdir"
-  note "Installed wasm-tools v${version} binary."
+  if [ "$found" -eq 1 ] && have wasm-tools; then
+    note "Installed wasm-tools v${version} binary."
+    return 0
+  fi
+  return 1
 }
 
 ensure_cli_tools() {
