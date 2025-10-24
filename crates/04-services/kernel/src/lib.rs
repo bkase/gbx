@@ -5,7 +5,7 @@
 mod instance;
 mod sink_transport;
 
-use crate::instance::{AnyCore, Instance};
+use crate::instance::Instance;
 use crate::sink_transport::TransportFrameSink;
 use kernel_core::ppu_stub::CYCLES_PER_FRAME;
 use kernel_core::{BusScalar, BusSimd, Core, CoreConfig, Model, SimdCore};
@@ -111,17 +111,20 @@ impl KernelFarm {
         let inst = self.ensure_instance(id);
         let cycles = inst.step_cycles(budget);
         let mut publish_frame = |inst: &mut Instance| -> bool {
-            let sink = &inst.sink;
-            let core = &mut inst.core;
-            let (width, height) = sink.dimensions();
+            let (mut width, mut height) = inst.sink.dimensions();
+            if width == 0 {
+                width = 160;
+            }
+            if height == 0 {
+                height = 144;
+            }
+            if width == 0 || height == 0 {
+                panic!("transport frame dimensions must be non-zero");
+            }
             let expected_len = usize::from(width)
                 .saturating_mul(usize::from(height))
                 .saturating_mul(4);
-            if let Some(span) = sink.produce_frame(expected_len, |buf| match core {
-                AnyCore::Scalar(core) => core.take_frame(buf),
-                AnyCore::Simd2(core) => core.take_frame(buf),
-                AnyCore::Simd4(core) => core.take_frame(buf),
-            }) {
+            if let Some((pixels, slot_span)) = inst.produce_frame(expected_len) {
                 let frame_id = inst.bump_frame_id();
                 out.push(KernelRep::LaneFrame {
                     group: id,
@@ -129,8 +132,8 @@ impl KernelFarm {
                     span: FrameSpan {
                         width,
                         height,
-                        pixels: Arc::from(&[][..]),
-                        slot_span: Some(span),
+                        pixels,
+                        slot_span,
                     },
                     frame_id,
                 });

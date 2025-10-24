@@ -298,4 +298,9 @@ where
     fn ppu_vram(&self) -> &[u8; 0x2000] {
         self.canonical_lane().ppu_vram()
     }
+
+    #[inline]
+    fn ppu_oam(&self) -> &[u8; 0xA0] {
+        self.canonical_lane().ppu_oam()
+    }
 }

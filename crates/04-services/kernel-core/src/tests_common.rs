@@ -110,6 +110,10 @@ fn vram(core: &BackendCore) -> &[u8; 0x2000] {
     &bus(core).vram
 }
 
+fn oam(core: &BackendCore) -> &[u8; 0xA0] {
+    &bus(core).oam
+}
+
 /// Verifies `ADD A,r` updates flags according to fixture cases.
 #[test]
 fn cpu_add8_flags() {
@@ -702,9 +706,10 @@ fn bg_render_blanks_when_disabled() {
     let mut buf = vec![0xAA; FRAME_BYTES];
 
     io_mut(&mut core).write(IoRegs::LCDC, 0x00);
-    core.ppu.render_frame_bg(
+    core.ppu.render_frame(
         io(&core),
         vram(&core),
+        oam(&core),
         &mut buf,
         FRAME_WIDTH as u16,
         FRAME_HEIGHT as u16,
@@ -717,9 +722,10 @@ fn bg_render_blanks_when_disabled() {
     }
 
     io_mut(&mut core).write(IoRegs::LCDC, 0x80);
-    core.ppu.render_frame_bg(
+    core.ppu.render_frame(
         io(&core),
         vram(&core),
+        oam(&core),
         &mut buf,
         FRAME_WIDTH as u16,
         FRAME_HEIGHT as u16,
@@ -746,9 +752,10 @@ fn bg_render_unsigned_tile_data() {
     vram_mut(&mut core)[map_offset] = 0x01;
 
     let mut buf = vec![0u8; FRAME_BYTES];
-    core.ppu.render_frame_bg(
+    core.ppu.render_frame(
         io(&core),
         vram(&core),
+        oam(&core),
         &mut buf,
         FRAME_WIDTH as u16,
         FRAME_HEIGHT as u16,
@@ -778,9 +785,10 @@ fn bg_render_signed_tile_data() {
     vram_mut(&mut core)[map_offset] = 0xFF;
 
     let mut buf = vec![0u8; FRAME_BYTES];
-    core.ppu.render_frame_bg(
+    core.ppu.render_frame(
         io(&core),
         vram(&core),
+        oam(&core),
         &mut buf,
         FRAME_WIDTH as u16,
         FRAME_HEIGHT as u16,
@@ -818,9 +826,10 @@ fn bg_render_scroll_wraps() {
     vram_mut(&mut core)[map_base + 31] = 0x03;
 
     let mut buf = vec![0u8; FRAME_BYTES];
-    core.ppu.render_frame_bg(
+    core.ppu.render_frame(
         io(&core),
         vram(&core),
+        oam(&core),
         &mut buf,
         FRAME_WIDTH as u16,
         FRAME_HEIGHT as u16,

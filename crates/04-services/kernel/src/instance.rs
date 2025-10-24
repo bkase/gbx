@@ -4,7 +4,7 @@ use core::simd::{LaneCount, SupportedLaneCount};
 use kernel_core::bus::IoRegs;
 use kernel_core::Exec;
 use kernel_core::{BusScalar, BusSimd, Core, Model, Scalar, SimdCore, SimdExec};
-use service_abi::{CpuVM, InspectorVMMinimal, MemSpace, PpuVM, TimersVM};
+use service_abi::{CpuVM, InspectorVMMinimal, MemSpace, PpuVM, SlotSpan, TimersVM};
 use std::sync::Arc;
 
 /// Execution backend container.
@@ -134,6 +134,7 @@ pub struct Instance {
     pub next_frame_id: u64,
     pub joypad: u8,
     pub lanes: NonZeroUsize,
+    boot: Option<BootSequence>,
 }
 
 impl Instance {
@@ -144,6 +145,7 @@ impl Instance {
             next_frame_id: 0,
             joypad: 0xFF,
             lanes: NonZeroUsize::new(1).unwrap(),
+            boot: None,
         }
     }
 
@@ -154,6 +156,7 @@ impl Instance {
             next_frame_id: 0,
             joypad: 0xFF,
             lanes: NonZeroUsize::new(2).unwrap(),
+            boot: None,
         }
     }
 
@@ -164,17 +167,25 @@ impl Instance {
             next_frame_id: 0,
             joypad: 0xFF,
             lanes: NonZeroUsize::new(4).unwrap(),
+            boot: None,
         }
     }
 
     pub fn step_cycles(&mut self, budget: u32) -> u32 {
-        self.core.step_cycles(budget)
+        if let Some(boot) = self.boot.as_mut() {
+            boot.step(budget)
+        } else {
+            self.core.step_cycles(budget)
+        }
     }
 
     pub fn step_instructions(&mut self, count: u32) -> (u32, u16) {
         let mut total_cycles = 0u32;
         let mut last_pc = self.pc();
         if count == 0 {
+            return (0, last_pc);
+        }
+        if self.boot.is_some() {
             return (0, last_pc);
         }
         for _ in 0..count {
@@ -189,7 +200,7 @@ impl Instance {
     }
 
     pub fn frame_ready(&self) -> bool {
-        self.core.frame_ready()
+        self.boot.is_none() && self.core.frame_ready()
     }
 
     pub fn bump_frame_id(&mut self) -> u64 {
@@ -198,8 +209,13 @@ impl Instance {
     }
 
     pub fn load_rom(&mut self, rom: Arc<[u8]>) {
+        let rom_copy = Arc::clone(&rom);
         self.core.load_rom(rom);
         self.core.reset_post_boot(Model::Dmg);
+        self.boot = match &mut self.core {
+            AnyCore::Scalar(core) => Some(BootSequence::new(core.as_mut(), rom_copy.as_ref())),
+            AnyCore::Simd2(_) | AnyCore::Simd4(_) => None,
+        };
         self.next_frame_id = 0;
     }
 
@@ -280,6 +296,294 @@ impl Instance {
             AnyCore::Simd2(core) => mem_window_simd::<2>(core, space, base, len),
             AnyCore::Simd4(core) => mem_window_simd::<4>(core, space, base, len),
         }
+    }
+
+    pub fn render_into(&mut self, buf: &mut [u8]) {
+        match (&mut self.boot, &mut self.core) {
+            (Some(boot), AnyCore::Scalar(core)) => {
+                let finished = boot.render(core.as_mut(), buf);
+                if finished {
+                    self.boot = None;
+                }
+            }
+            (Some(_), AnyCore::Simd2(core)) => {
+                core.take_frame(buf);
+                self.boot = None;
+            }
+            (Some(_), AnyCore::Simd4(core)) => {
+                core.take_frame(buf);
+                self.boot = None;
+            }
+            (None, AnyCore::Scalar(core)) => core.take_frame(buf),
+            (None, AnyCore::Simd2(core)) => core.take_frame(buf),
+            (None, AnyCore::Simd4(core)) => core.take_frame(buf),
+        }
+    }
+
+    pub fn produce_frame(&mut self, expected_len: usize) -> Option<(Arc<[u8]>, Option<SlotSpan>)> {
+        let this = self as *mut Instance;
+        self.sink
+            .produce_frame(expected_len, |buf| unsafe { (&mut *this).render_into(buf) })
+    }
+}
+
+struct BootSequence {
+    scy: u8,
+    phase: BootPhase,
+    tiles: Vec<[u8; 64]>,
+    map: [[u8; 32]; 32],
+}
+
+enum BootPhase {
+    Scroll {
+        remaining_steps: u16,
+        frame_delay: u8,
+    },
+    Pause {
+        frames_left: u16,
+    },
+    Done,
+}
+
+const BOOT_TILE_COUNT: usize = 0x19;
+const BOOT_SHADES: [u8; 4] = [0xFF, 0xAA, 0x55, 0x00];
+
+impl BootSequence {
+    fn new(core: &mut Core<Scalar, BusScalar>, rom: &[u8]) -> Self {
+        prepare_boot_vram(&mut core.bus, rom);
+        core.bus.io.write(IoRegs::BGP, 0xFC);
+        core.bus.io.write(IoRegs::SCY, 0x00);
+        let tiles = capture_logo_tiles(&core.bus);
+        let map = build_logo_map();
+        Self {
+            scy: 0,
+            phase: BootPhase::Scroll {
+                remaining_steps: 100,
+                frame_delay: 2,
+            },
+            tiles,
+            map,
+        }
+    }
+
+    fn step(&mut self, budget: u32) -> u32 {
+        budget
+    }
+
+    fn render(&mut self, core: &mut Core<Scalar, BusScalar>, buf: &mut [u8]) -> bool {
+        render_boot_frame(buf, self.scy, &self.tiles, &self.map);
+        self.advance(core);
+        matches!(self.phase, BootPhase::Done)
+    }
+
+    fn advance(&mut self, core: &mut Core<Scalar, BusScalar>) {
+        match &mut self.phase {
+            BootPhase::Scroll {
+                remaining_steps,
+                frame_delay,
+            } => {
+                if *remaining_steps == 0 {
+                    self.phase = BootPhase::Pause { frames_left: 64 };
+                    return;
+                }
+
+                if *frame_delay == 0 {
+                    self.scy = self.scy.wrapping_sub(1);
+                    core.bus.io.write(IoRegs::SCY, self.scy);
+                    *remaining_steps = remaining_steps.saturating_sub(1);
+                    *frame_delay = 2;
+                    if *remaining_steps == 0 {
+                        self.phase = BootPhase::Pause { frames_left: 64 };
+                    }
+                } else {
+                    *frame_delay -= 1;
+                }
+            }
+            BootPhase::Pause { frames_left } => {
+                if *frames_left == 0 {
+                    self.scy = 0;
+                    core.bus.io.write(IoRegs::SCY, 0x00);
+                    self.phase = BootPhase::Done;
+                } else {
+                    *frames_left -= 1;
+                }
+            }
+            BootPhase::Done => {}
+        }
+    }
+}
+
+fn capture_logo_tiles(bus: &BusScalar) -> Vec<[u8; 64]> {
+    let mut tiles = vec![[0u8; 64]; BOOT_TILE_COUNT + 1];
+    let base = (0x8010 - 0x8000) as usize;
+    for tile_id in 1..=BOOT_TILE_COUNT {
+        let offset = base + (tile_id - 1) * 16;
+        if offset + 16 > bus.vram.len() {
+            break;
+        }
+        let tile_bytes = &bus.vram[offset..offset + 16];
+        let tile = &mut tiles[tile_id];
+        for row in 0..8 {
+            let lo = tile_bytes[row * 2];
+            let hi = tile_bytes[row * 2 + 1];
+            for col in 0..8 {
+                let bit = 7 - col;
+                let color = ((hi >> bit) & 0x01) << 1 | ((lo >> bit) & 0x01);
+                tile[row * 8 + col] = color;
+            }
+        }
+    }
+    tiles
+}
+
+fn build_logo_map() -> [[u8; 32]; 32] {
+    let mut map = [[0u8; 32]; 32];
+    map[8][16] = BOOT_TILE_COUNT as u8;
+    let mut a = BOOT_TILE_COUNT as u8;
+    let mut y = 9usize;
+    let mut x = 15usize;
+    loop {
+        let mut c = 12u8;
+        while c > 0 {
+            a = a.wrapping_sub(1);
+            if a == 0 {
+                return map;
+            }
+            map[y % 32][x % 32] = a;
+            if x == 0 {
+                x = 31;
+                y = y.wrapping_sub(1);
+            } else {
+                x -= 1;
+            }
+            c -= 1;
+        }
+        x = 15;
+        y = y.wrapping_sub(1);
+    }
+}
+
+fn render_boot_frame(buf: &mut [u8], scy: u8, tiles: &[[u8; 64]], map: &[[u8; 32]; 32]) {
+    let width = 160usize;
+    let height = 144usize;
+    for y in 0..height {
+        let bg_y = (y + scy as usize) & 0xFF;
+        let tile_row = (bg_y / 8) % 32;
+        let tile_y = bg_y % 8;
+        for x in 0..width {
+            let bg_x = x & 0xFF;
+            let tile_col = (bg_x / 8) % 32;
+            let tile_x = bg_x % 8;
+            let tile_id = map[tile_row][tile_col] as usize;
+            let color_idx = if tile_id < tiles.len() {
+                tiles[tile_id][tile_y * 8 + tile_x] as usize
+            } else {
+                0
+            };
+            let offset = (y * width + x) * 4;
+            let shade = BOOT_SHADES[color_idx];
+            buf[offset] = shade;
+            buf[offset + 1] = shade;
+            buf[offset + 2] = shade;
+            buf[offset + 3] = 0xFF;
+        }
+    }
+}
+
+fn prepare_boot_vram(bus: &mut BusScalar, rom: &[u8]) {
+    write_logo_tiles(bus, rom);
+    write_trademark_tile(bus);
+    write_logo_tilemap(bus);
+}
+
+fn write_logo_tiles(bus: &mut BusScalar, rom: &[u8]) {
+    let logo_bytes = if rom.len() >= 0x0134 {
+        &rom[0x0104..0x0134]
+    } else {
+        &[]
+    };
+
+    let mut addr = 0x8010u16;
+    for &byte in logo_bytes {
+        let high = byte >> 4;
+        write_logo_nibble(bus, addr, high);
+        addr = addr.wrapping_add(4);
+        let low = byte & 0x0F;
+        write_logo_nibble(bus, addr, low);
+        addr = addr.wrapping_add(4);
+    }
+}
+
+fn write_logo_nibble(bus: &mut BusScalar, addr: u16, nibble: u8) {
+    let expanded = expand_nibble(nibble & 0x0F);
+    let idx = vram_index(addr);
+    if idx + 3 >= bus.vram.len() {
+        return;
+    }
+    bus.vram[idx] = expanded;
+    bus.vram[idx + 1] = 0;
+    bus.vram[idx + 2] = expanded;
+    bus.vram[idx + 3] = 0;
+}
+
+fn expand_nibble(nibble: u8) -> u8 {
+    let b3 = (nibble >> 3) & 1;
+    let b2 = (nibble >> 2) & 1;
+    let b1 = (nibble >> 1) & 1;
+    let b0 = nibble & 1;
+    ((b3 * 0b11) << 6) | ((b2 * 0b11) << 4) | ((b1 * 0b11) << 2) | (b0 * 0b11)
+}
+
+fn write_trademark_tile(bus: &mut BusScalar) {
+    const TRADEMARK: [u8; 8] = [0x3C, 0x42, 0xB9, 0xA5, 0xB9, 0xA5, 0x42, 0x3C];
+    let mut addr = 0x80D0u16;
+    for &byte in TRADEMARK.iter() {
+        let idx = vram_index(addr);
+        if idx >= bus.vram.len() {
+            break;
+        }
+        bus.vram[idx] = byte;
+        addr = addr.wrapping_add(2);
+    }
+}
+
+fn write_logo_tilemap(bus: &mut BusScalar) {
+    let mut a = 0x19u8;
+    if let Some(idx) = vram_index_checked(0x9910, bus.vram.len()) {
+        bus.vram[idx] = a;
+    }
+
+    let mut hl = 0x992Fu16;
+    'outer: loop {
+        let mut c = 0x0Cu8;
+        loop {
+            a = a.wrapping_sub(1);
+            if a == 0 {
+                break 'outer;
+            }
+            if let Some(idx) = vram_index_checked(hl, bus.vram.len()) {
+                bus.vram[idx] = a;
+            }
+            hl = hl.wrapping_sub(1);
+            c = c.saturating_sub(1);
+            if c == 0 {
+                hl = (hl & 0xFF00) | 0x000F;
+                break;
+            }
+        }
+    }
+}
+
+fn vram_index(addr: u16) -> usize {
+    (addr - 0x8000) as usize
+}
+
+fn vram_index_checked(addr: u16, len: usize) -> Option<usize> {
+    let idx = vram_index(addr);
+    if idx < len {
+        Some(idx)
+    } else {
+        None
     }
 }
 

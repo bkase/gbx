@@ -1,7 +1,7 @@
 use service_abi::SlotSpan;
 use std::cell::RefCell;
 use std::sync::Arc;
-use transport::{SlotPoolHandle, SlotPush};
+use transport::SlotPoolHandle;
 
 struct TransportLease {
     slot_idx: u32,
@@ -22,6 +22,8 @@ pub struct TransportFrameSink {
 
 impl TransportFrameSink {
     pub fn new(pool: Arc<SlotPoolHandle>, width: u16, height: u16) -> Self {
+        let width = if width == 0 { 160 } else { width };
+        let height = if height == 0 { 144 } else { height };
         Self {
             pool,
             width,
@@ -67,7 +69,11 @@ impl TransportFrameSink {
         }
     }
 
-    pub fn publish(&self, slot_idx: u32, written_len: usize) -> Option<SlotSpan> {
+    pub fn publish(
+        &self,
+        slot_idx: u32,
+        written_len: usize,
+    ) -> Option<(Arc<[u8]>, Option<SlotSpan>)> {
         let lease = self
             .active
             .borrow_mut()
@@ -77,37 +83,24 @@ impl TransportFrameSink {
 
         // SAFETY: lease pointer is owned by the frame sink and not used elsewhere.
         let buffer = unsafe { Box::from_raw(lease.ptr) };
-        let copy_len = written_len.min(buffer.len());
+        let mut vec = buffer.into_vec();
+        let copy_len = written_len.min(vec.len());
 
-        let push_outcome = self.pool.with_mut(|pool| {
-            {
-                let slot = pool.slot_mut(slot_idx);
-                let len = copy_len.min(slot.len());
-                slot[..len].copy_from_slice(&buffer[..len]);
-                if len < slot.len() {
-                    slot[len..].fill(0);
-                }
-            }
-            pool.push_ready(slot_idx)
+        self.pool.with_mut(|pool| {
+            pool.release_free(slot_idx);
         });
 
-        match push_outcome {
-            SlotPush::Ok => Some(SlotSpan {
-                start_idx: slot_idx,
-                count: 1,
-            }),
-            SlotPush::WouldBlock => {
-                self.pool.with_mut(|pool| pool.release_free(slot_idx));
-                None
-            }
-        }
+        vec.truncate(copy_len);
+        let pixels = Arc::<[u8]>::from(vec.into_boxed_slice());
+
+        Some((pixels, None))
     }
 
     pub fn produce_frame(
         &self,
         expected_len: usize,
         mut write: impl FnMut(&mut [u8]),
-    ) -> Option<SlotSpan> {
+    ) -> Option<(Arc<[u8]>, Option<SlotSpan>)> {
         let (slot_idx, buffer) = self.acquire_frame()?;
         let usable_len = expected_len.min(buffer.len());
         write(&mut buffer[..usable_len]);

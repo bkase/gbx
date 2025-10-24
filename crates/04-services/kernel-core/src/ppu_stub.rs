@@ -60,6 +60,8 @@ pub trait PpuFrameSource {
     fn ppu_io(&self) -> &IoRegs;
     /// Returns a shared reference to VRAM.
     fn ppu_vram(&self) -> &[u8; 0x2000];
+    /// Returns a shared reference to OAM.
+    fn ppu_oam(&self) -> &[u8; 0xA0];
 }
 
 impl PpuFrameSource for BusScalar {
@@ -71,6 +73,11 @@ impl PpuFrameSource for BusScalar {
     #[inline]
     fn ppu_vram(&self) -> &[u8; 0x2000] {
         &self.vram
+    }
+
+    #[inline]
+    fn ppu_oam(&self) -> &[u8; 0xA0] {
+        &self.oam
     }
 }
 
@@ -140,68 +147,196 @@ impl PpuStub {
         *self = Self::default();
     }
 
-    /// Renders the background plane into `out_rgba` using the current VRAM/IO state.
-    pub fn render_frame_bg(
+    /// Renders a complete frame using background, window, and sprites.
+    pub fn render_frame(
         &self,
         io: &IoRegs,
         vram: &[u8; 0x2000],
+        oam: &[u8; 0xA0],
         out_rgba: &mut [u8],
         width: u16,
         height: u16,
     ) {
         let lcdc = io.read(IoRegs::LCDC);
         let lcd_on = lcdc & LCDC_ENABLE != 0;
-        let bg_on = lcdc & 0x01 != 0;
-        if !lcd_on || !bg_on {
-            fill_solid(out_rgba, DMG_SHADES[0]);
+
+        fill_solid(out_rgba, DMG_SHADES[0]);
+
+        if !lcd_on {
             return;
         }
 
-        let scy = io.read(IoRegs::SCY);
-        let scx = io.read(IoRegs::SCX);
-        let bgp = io.read(IoRegs::BGP);
-        let tile_data_unsigned = lcdc & 0x10 != 0;
-        let map_base: u16 = if lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
+        let width_px = usize::from(width);
+        let height_px = usize::from(height);
 
-        let palette = decode_bgp(bgp);
+        let mut bg_indices = vec![0u8; width_px * height_px];
 
-        let width = usize::from(width);
-        let height = usize::from(height);
+        // Background plane
+        if (lcdc & 0x01) != 0 {
+            let scy = io.read(IoRegs::SCY);
+            let scx = io.read(IoRegs::SCX);
+            let tile_data_unsigned = lcdc & 0x10 != 0;
+            let map_base: u16 = if lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
+            let palette = decode_bgp(io.read(IoRegs::BGP));
 
-        let mut dst_idx = 0usize;
-        for y in 0..height {
-            let wy = scy.wrapping_add(y as u8);
-            let tile_row = ((wy as usize) >> 3) & 31;
-            let row_in_tile = (wy & 0x07) as usize;
+            for y in 0..height_px {
+                let wy = scy.wrapping_add(y as u8);
+                let tile_row = ((wy as usize) >> 3) & 31;
+                let row_in_tile = (wy & 0x07) as usize;
 
-            for x in 0..width {
-                let wx = scx.wrapping_add(x as u8);
-                let tile_col = ((wx as usize) >> 3) & 31;
-                let col_in_tile = (wx & 0x07) as usize;
+                for x in 0..width_px {
+                    let wx = scx.wrapping_add(x as u8);
+                    let tile_col = ((wx as usize) >> 3) & 31;
+                    let col_in_tile = (wx & 0x07) as usize;
 
-                let map_index = tile_row * 32 + tile_col;
-                let map_addr = map_base.wrapping_add(map_index as u16);
-                let tile_id = read_vram(vram, map_addr);
+                    let map_index = tile_row * 32 + tile_col;
+                    let map_addr = map_base.wrapping_add(map_index as u16);
+                    let tile_id = read_vram(vram, map_addr);
 
-                let tile_base = if tile_data_unsigned {
-                    0x8000u16.wrapping_add(u16::from(tile_id) * 16)
-                } else {
-                    let signed = tile_id as i8 as i16;
-                    (0x9000i32 + i32::from(signed) * 16) as u16
-                };
-                let row_addr = tile_base.wrapping_add((row_in_tile as u16) * 2);
-                let lo = read_vram(vram, row_addr);
-                let hi = read_vram(vram, row_addr.wrapping_add(1));
+                    let tile_base = if tile_data_unsigned {
+                        0x8000u16.wrapping_add(u16::from(tile_id) * 16)
+                    } else {
+                        let signed = tile_id as i8 as i16;
+                        (0x9000i32 + i32::from(signed) * 16) as u16
+                    };
+                    let row_addr = tile_base.wrapping_add((row_in_tile as u16) * 2);
+                    let lo = read_vram(vram, row_addr);
+                    let hi = read_vram(vram, row_addr.wrapping_add(1));
 
-                let bit = 7 - col_in_tile as u8;
-                let color_id = ((hi >> bit) & 0x01) << 1 | ((lo >> bit) & 0x01);
-                let shade = palette[color_id as usize];
+                    let bit = 7 - col_in_tile as u8;
+                    let color_id = ((hi >> bit) & 0x01) << 1 | ((lo >> bit) & 0x01);
+                    bg_indices[y * width_px + x] = color_id;
+                    let shade = palette[color_id as usize];
 
-                out_rgba[dst_idx] = shade;
-                out_rgba[dst_idx + 1] = shade;
-                out_rgba[dst_idx + 2] = shade;
-                out_rgba[dst_idx + 3] = 0xFF;
-                dst_idx += 4;
+                    let dst_idx = (y * width_px + x) * 4;
+                    out_rgba[dst_idx] = shade;
+                    out_rgba[dst_idx + 1] = shade;
+                    out_rgba[dst_idx + 2] = shade;
+                    out_rgba[dst_idx + 3] = 0xFF;
+                }
+            }
+        }
+
+        // Window plane
+        if (lcdc & 0x20) != 0 {
+            let wy = io.read(IoRegs::WY);
+            let wx = io.read(IoRegs::WX);
+            let tile_data_unsigned = lcdc & 0x10 != 0;
+            let map_base: u16 = if lcdc & 0x40 != 0 { 0x9C00 } else { 0x9800 };
+            let palette = decode_bgp(io.read(IoRegs::BGP));
+
+            for y in 0..height_px {
+                if (y as u8) < wy {
+                    continue;
+                }
+
+                let win_y = (y as u8).wrapping_sub(wy) as usize;
+                let tile_row = (win_y >> 3) & 31;
+                let row_in_tile = (win_y & 0x07) as usize;
+
+                for x in 0..width_px {
+                    let wx_adjusted = (wx as i16) - 7;
+                    if (x as i16) < wx_adjusted {
+                        continue;
+                    }
+
+                    let win_x = ((x as i16) - wx_adjusted) as usize;
+                    let tile_col = (win_x >> 3) & 31;
+                    let col_in_tile = (win_x & 0x07) as usize;
+
+                    let map_index = tile_row * 32 + tile_col;
+                    let map_addr = map_base.wrapping_add(map_index as u16);
+                    let tile_id = read_vram(vram, map_addr);
+
+                    let tile_base = if tile_data_unsigned {
+                        0x8000u16.wrapping_add(u16::from(tile_id) * 16)
+                    } else {
+                        let signed = tile_id as i8 as i16;
+                        (0x9000i32 + i32::from(signed) * 16) as u16
+                    };
+                    let row_addr = tile_base.wrapping_add((row_in_tile as u16) * 2);
+                    let lo = read_vram(vram, row_addr);
+                    let hi = read_vram(vram, row_addr.wrapping_add(1));
+
+                    let bit = 7 - col_in_tile as u8;
+                    let color_id = ((hi >> bit) & 0x01) << 1 | ((lo >> bit) & 0x01);
+                    bg_indices[y * width_px + x] = color_id;
+                    let shade = palette[color_id as usize];
+
+                    let dst_idx = (y * width_px + x) * 4;
+                    out_rgba[dst_idx] = shade;
+                    out_rgba[dst_idx + 1] = shade;
+                    out_rgba[dst_idx + 2] = shade;
+                    out_rgba[dst_idx + 3] = 0xFF;
+                }
+            }
+        }
+
+        // Sprites
+        if (lcdc & 0x02) != 0 {
+            let sprite_height = if (lcdc & 0x04) != 0 { 16 } else { 8 };
+            let obp0 = decode_bgp(io.read(IoRegs::OBP0));
+            let obp1 = decode_bgp(io.read(IoRegs::OBP1));
+
+            for sprite in (0..40).rev() {
+                let base = sprite * 4;
+                let y_pos = oam[base].wrapping_sub(16);
+                let x_pos = oam[base + 1].wrapping_sub(8);
+                let tile_id = oam[base + 2];
+                let attrs = oam[base + 3];
+
+                let palette = if (attrs & 0x10) != 0 { obp1 } else { obp0 };
+                let flip_x = (attrs & 0x20) != 0;
+                let flip_y = (attrs & 0x40) != 0;
+                let bg_priority = (attrs & 0x80) != 0;
+
+                for row in 0..sprite_height {
+                    let screen_y = y_pos.wrapping_add(row as u8);
+                    if screen_y as usize >= height_px {
+                        continue;
+                    }
+
+                    let effective_row = if flip_y { sprite_height - 1 - row } else { row };
+
+                    let tile_base = if sprite_height == 16 {
+                        let base_id = tile_id & 0xFE;
+                        let row_offset = ((effective_row % 8) * 2) as u16;
+                        let slab_offset = ((effective_row / 8) * 32) as u16;
+                        0x8000u16 + u16::from(base_id) * 16 + row_offset + slab_offset
+                    } else {
+                        let row_offset = (effective_row * 2) as u16;
+                        0x8000u16 + u16::from(tile_id) * 16 + row_offset
+                    };
+
+                    let lo = read_vram(vram, tile_base);
+                    let hi = read_vram(vram, tile_base.wrapping_add(1));
+
+                    for col in 0..8 {
+                        let screen_x = x_pos.wrapping_add(col as u8);
+                        if screen_x as usize >= width_px {
+                            continue;
+                        }
+
+                        let bit_index = if flip_x { col } else { 7 - col };
+                        let bit = bit_index as u8;
+                        let color_id = ((hi >> bit) & 0x01) << 1 | ((lo >> bit) & 0x01);
+                        if color_id == 0 {
+                            continue;
+                        }
+
+                        let idx = (screen_y as usize) * width_px + screen_x as usize;
+                        if bg_priority && bg_indices[idx] != 0 {
+                            continue;
+                        }
+
+                        let shade = palette[color_id as usize];
+                        let dst_idx = idx * 4;
+                        out_rgba[dst_idx] = shade;
+                        out_rgba[dst_idx + 1] = shade;
+                        out_rgba[dst_idx + 2] = shade;
+                        out_rgba[dst_idx + 3] = 0xFF;
+                    }
+                }
             }
         }
     }

@@ -119,6 +119,7 @@ impl Codec for KernelCodec {
                     lane: *lane,
                     frame_id: *frame_id,
                     span: encode_slot_span(span),
+                    pixels: span.pixels.to_vec(),
                 },
             ),
             KernelRep::RomLoaded { bytes_len, .. } => (
@@ -168,10 +169,11 @@ impl Codec for KernelCodec {
                 lane,
                 frame_id,
                 span,
+                pixels,
             } => KernelRep::LaneFrame {
                 group: 0,
                 lane: lane.to_native(),
-                span: frame_span_from_slot(span),
+                span: frame_span_from_parts(span, pixels),
                 frame_id: frame_id.to_native(),
             },
             ArchivedKernelRepV1::RomLoaded { bytes_len } => KernelRep::RomLoaded {
@@ -670,7 +672,10 @@ fn encode_slot_span(span: &service_abi::FrameSpan) -> SlotSpanV1 {
     }
 }
 
-fn frame_span_from_slot(span: &ArchivedSlotSpanV1) -> service_abi::FrameSpan {
+fn frame_span_from_parts(
+    span: &ArchivedSlotSpanV1,
+    pixels: &rkyv::Archived<Vec<u8>>,
+) -> service_abi::FrameSpan {
     let start_idx = span.start_idx.to_native();
     let count = span.count.to_native();
     let slot_span = if count == 0 {
@@ -679,7 +684,17 @@ fn frame_span_from_slot(span: &ArchivedSlotSpanV1) -> service_abi::FrameSpan {
         Some(SlotSpan { start_idx, count })
     };
     let mut frame_span = default_frame_span();
+    if frame_span.width == 0 {
+        frame_span.width = 160;
+    }
+    if frame_span.height == 0 {
+        frame_span.height = 144;
+    }
     frame_span.slot_span = slot_span;
+    if !pixels.is_empty() {
+        let owned = pixels.as_slice().to_vec().into_boxed_slice();
+        frame_span.pixels = Arc::from(owned);
+    }
     frame_span
 }
 

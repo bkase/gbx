@@ -139,21 +139,25 @@ pub fn worker_register_services(_layout_ptr: u32, _layout_len: u32) -> i32 {
             KernelService::default(),
             "kernel",
         ));
+        console::log_1(&"worker_register_services: kernel registered".into());
         runtime.register(FabricServiceEngine::new(
             fs_endpoint,
             FsService::default(),
             "fs",
         ));
+        console::log_1(&"worker_register_services: fs registered".into());
         runtime.register(FabricServiceEngine::new(
             gpu_endpoint,
             GpuService::default(),
             "gpu",
         ));
+        console::log_1(&"worker_register_services: gpu registered".into());
         runtime.register(FabricServiceEngine::new(
             audio_endpoint,
             AudioService::default(),
             "audio",
         ));
+        console::log_1(&"worker_register_services: audio registered".into());
         OK
     });
 

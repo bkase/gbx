@@ -391,6 +391,8 @@ pub enum KernelRepV1 {
         frame_id: FrameId,
         /// Slot span carrying the frame payload.
         span: SlotSpanV1,
+        /// Embedded RGBA pixels (optional when slot span not used).
+        pixels: Vec<u8>,
     },
     /// ROM loading completed with the number of bytes.
     RomLoaded {

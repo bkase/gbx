@@ -49,11 +49,11 @@ impl TransportServices {
         let kernel_spec = ServiceSpec {
             codec: KernelCodec,
             lossless: Some(RingSpec {
-                capacity_bytes: 32 * 1024,
+                capacity_bytes: 128 * 1024,
                 envelope_tag: TAG_KERNEL_CMD,
             }),
             besteffort: Some(RingSpec {
-                capacity_bytes: 32 * 1024,
+                capacity_bytes: 64 * 1024,
                 envelope_tag: TAG_KERNEL_CMD,
             }),
             coalesce: Some(MailboxSpec {

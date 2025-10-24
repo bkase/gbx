@@ -61,6 +61,7 @@ fn transport_schema_goldens_v1() {
                 start_idx: 11,
                 count: 2,
             },
+            pixels: vec![0x10, 0x20, 0x30, 0x40],
         },
     );
 

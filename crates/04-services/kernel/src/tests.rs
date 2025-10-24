@@ -1,4 +1,4 @@
-use super::KernelService;
+use super::{instance::AnyCore, KernelFarm, KernelService};
 use kernel_core::ppu_stub::CYCLES_PER_FRAME;
 use kernel_core::CoreConfig;
 use service_abi::{
@@ -31,6 +31,11 @@ fn load_blank_rom(service: &KernelServiceHandle, group: u16) {
 fn drain_debug(service: &KernelServiceHandle, budget: usize) -> Vec<KernelRep> {
     collect_reports(service.drain(budget))
 }
+const DMG_LOGO: [u8; 48] = [
+    0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
+    0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
+    0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E,
+];
 
 #[test]
 fn tick_produces_frame() {
@@ -236,4 +241,52 @@ fn debug_step_frame_produces_frame_and_tick() {
 
     assert!(saw_debug, "expected debug stepped frame report");
     assert!(saw_tick_done, "expected TickDone alongside frame step");
+}
+
+#[test]
+fn boot_logo_populates_vram() {
+    let frame_pool = Arc::new(SlotPoolHandle::new(
+        SlotPool::new(SlotPoolConfig {
+            slot_count: 4,
+            slot_size: 160 * 144 * 4,
+        })
+        .expect("slot pool"),
+    ));
+
+    let mut farm = KernelFarm::new(frame_pool, CoreConfig::default());
+    let mut rom = vec![0u8; 0x8000];
+    rom[0x0104..0x0134].copy_from_slice(&DMG_LOGO);
+    let rom = Arc::<[u8]>::from(rom.into_boxed_slice());
+    farm.load_rom(0, Arc::clone(&rom));
+
+    let inst = farm.ensure_instance(0);
+    let consumed = inst.step_cycles(70_224);
+    assert_eq!(consumed, 70_224);
+    let vram = match &inst.core {
+        AnyCore::Scalar(core) => &core.bus.vram,
+        _ => panic!("boot logo test expects scalar core"),
+    };
+
+    let base = (0x8010 - 0x8000) as usize;
+    let sample = &vram[base..base + 16];
+    assert!(sample.iter().any(|&byte| byte != 0));
+
+    let mut frame = vec![0u8; 160 * 144 * 4];
+    inst.render_into(&mut frame);
+    assert!(frame.iter().any(|&byte| byte != 0xFF));
+    if let Some(idx) = frame
+        .chunks_exact(4)
+        .position(|px| px != [0xFF, 0xFF, 0xFF, 0xFF])
+    {
+        let px = &frame[idx * 4..idx * 4 + 4];
+        eprintln!("first differing pixel index={} rgba={:?}", idx, px);
+    }
+
+    let (width, height) = inst.sink.dimensions();
+    let expected_len = usize::from(width) * usize::from(height) * 4;
+    let produced = inst
+        .produce_frame(expected_len)
+        .expect("frame production")
+        .0;
+    assert!(produced.iter().any(|&byte| byte != 0xFF));
 }

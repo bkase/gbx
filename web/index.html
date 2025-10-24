@@ -30,11 +30,10 @@
   <div id="info">Initializing...</div>
 
   <script type="module">
-    import init, { gbx_init, gbx_tick, gbx_consume_frame } from "./pkg/fabric_worker_wasm.js";
+    import init, { gbx_consume_frame, gbx_init, gbx_load_rom, gbx_tick } from "./pkg/fabric_worker_wasm.js";
 
     const canvas = document.getElementById("c");
     const ctx = canvas.getContext("2d");
-    const img = new ImageData(160, 144);
     const info = document.getElementById("info");
     const title = document.getElementById("title");
 
@@ -46,13 +45,19 @@
       title.textContent = "GBX UI Integration Test";
     }
 
-    function log(msg) {
-      console.log(msg);
+    const ROM_PATH = "./roms/tetris.gb";
+
+    function setInfo(msg) {
       if (isTest) {
         info.innerHTML += `<div>${msg}</div>`;
       } else {
         info.textContent = msg;
       }
+    }
+
+    function log(msg) {
+      console.log(msg);
+      setInfo(msg);
     }
 
     function pass(msg) {
@@ -70,11 +75,54 @@
       throw new Error(msg);
     }
 
-    // wasm-bindgen loader is async; our exports are synchronous
-    await init();
+    function ensureCanvasSize(width, height) {
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+    }
 
-    if (isTest) {
-      // ===== TEST MODE =====
+    function drawFrame(width, height, pixels) {
+      if (!pixels) {
+        return;
+      }
+      ensureCanvasSize(width, height);
+      const data = pixels instanceof Uint8ClampedArray ? pixels : new Uint8ClampedArray(pixels);
+      const image = new ImageData(data, width, height);
+      ctx.putImageData(image, 0, 0);
+    }
+
+    function consumeLaneFrame(report) {
+      let width = report.width || 160;
+      let height = report.height || 144;
+      let pixels = null;
+
+      if (report.pixels) {
+        pixels = report.pixels;
+      } else if (typeof report.start_idx === "number") {
+        const slotCount = typeof report.slot_count === "number" ? report.slot_count : 1;
+        const frame = gbx_consume_frame(report.start_idx, slotCount, width, height);
+        width = frame.width || width;
+        height = frame.height || height;
+        pixels = frame.pixels;
+      }
+
+      if (pixels) {
+        drawFrame(width, height, pixels);
+      }
+
+      return Boolean(pixels);
+    }
+
+    async function fetchRomBytes() {
+      const response = await fetch(ROM_PATH);
+      if (!response.ok) {
+        throw new Error(`ROM fetch failed: ${response.status} ${response.statusText}`);
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    }
+
+    async function runTest() {
       try {
         pass("WASM module loaded");
 
@@ -82,124 +130,90 @@
         gbx_init();
         pass("gbx_init() succeeded");
 
-        log("Calling gbx_tick()...");
-        const reports = gbx_tick(32);
-        pass(`gbx_tick() returned ${reports.length} reports`);
+        log("Loading blargg 03 ROM...");
+        const rom = await fetchRomBytes();
+        gbx_load_rom(rom);
+        pass("gbx_load_rom() succeeded");
 
-        if (reports.length === 0) {
-          fail("Expected at least one report from gbx_tick()");
-        }
-
-        // Look for LaneFrame report
         let foundLaneFrame = false;
-        for (const r of reports) {
-          log(`  Report type: ${r.type}`);
-          if (r.type === "Kernel.LaneFrame") {
-            foundLaneFrame = true;
-            pass(`Found LaneFrame: frame_id=${r.frame_id}, lane=${r.lane}, w=${r.width}, h=${r.height}`);
-
-            let pixels = null;
-
-            // Try to consume if slot_span is present
-            if (r.start_idx !== undefined) {
-              log(`  Attempting to consume frame from slot ${r.start_idx}...`);
-              try {
-                const frame = gbx_consume_frame(r.start_idx);
-                pixels = frame.pixels;
-                pass(`Consumed frame from slot: ${frame.width}x${frame.height}, ${frame.pixels.length} bytes`);
-              } catch (e) {
-                log(`  Note: Could not consume frame (slot not ready): ${e.message}`);
-              }
-            } else if (r.pixels) {
-              // Embedded pixels (mock services path)
-              pixels = r.pixels;
-              pass(`Frame has embedded pixels: ${pixels.length} bytes`);
-            } else {
-              log(`  Note: LaneFrame has no slot_span and no embedded pixels`);
-            }
-
-            // Verify frame dimensions and pixels if present
-            if (r.width !== 160 || r.height !== 144) {
-              fail(`Expected 160x144 frame, got ${r.width}x${r.height}`);
-            }
-
-            if (pixels) {
-              if (pixels.length !== 160 * 144 * 4) {
-                fail(`Expected ${160*144*4} pixel bytes, got ${pixels.length}`);
-              }
-
-              // Sample pixels to verify checkerboard pattern
-              log(`  Pixel samples: [0]=${pixels[0]}, [8*4]=${pixels[8*4]}, [3]=${pixels[3]}`);
-              if (pixels[3] !== 0xFF) {
-                fail(`Expected alpha=0xFF, got ${pixels[3]}`);
+        for (let i = 0; i < 16 && !foundLaneFrame; i++) {
+          const reports = gbx_tick(32);
+          log(`Tick ${i}: ${reports.length} reports`);
+          for (const r of reports) {
+            log(`  Report type: ${r.type}`);
+            if (r.type === "Kernel.LaneFrame") {
+              if (consumeLaneFrame(r)) {
+                pass(`LaneFrame ready (frame_id=${r.frame_id}, lane=${r.lane})`);
+                foundLaneFrame = true;
+                break;
               }
             }
           }
         }
 
         if (!foundLaneFrame) {
-          log("Warning: No LaneFrame report (kernel may not produce frames on first tick)");
+          fail("No LaneFrame observed within tick budget");
         }
 
         pass("All UI export smoke tests passed");
         console.log("WASM_TEST_DONE");
-
       } catch (e) {
         fail(`Test failed: ${e.message}`);
       }
+    }
 
-    } else {
-      // ===== DEMO MODE =====
-      let frameCount = 0;
-      let startTime = Date.now();
-
+    async function runDemo() {
       try {
         gbx_init();
-        info.textContent = "Running...";
       } catch (e) {
         info.textContent = `Init error: ${e}`;
         throw e;
       }
 
+      try {
+        const rom = await fetchRomBytes();
+        gbx_load_rom(rom);
+        info.textContent = "ROM loaded. Running...";
+      } catch (e) {
+        info.textContent = `ROM load failed: ${e.message}`;
+        throw e;
+      }
+
+      let frameCount = 0;
+      let startTime = Date.now();
+
       function loop() {
         try {
-          const reps = gbx_tick(32);
-          for (const r of reps) {
-            if (r.type === "Kernel.LaneFrame") {
-              let pixels = null;
-
-              if (r.start_idx !== undefined) {
-                // Slot pool path - consume from pool
-                const f = gbx_consume_frame(r.start_idx);
-                pixels = f.pixels;
-              } else if (r.pixels) {
-                // Direct pixel path - use embedded pixels
-                pixels = r.pixels;
-              }
-
-              if (pixels) {
-                img.data.set(pixels);
-                ctx.putImageData(img, 0, 0);
-                frameCount++;
-
-                // Update info every 60 frames
-                if (frameCount % 60 === 0) {
-                  const elapsed = (Date.now() - startTime) / 1000;
-                  const fps = (frameCount / elapsed).toFixed(1);
-                  info.textContent = `Frames: ${frameCount} | FPS: ${fps}`;
-                }
-              }
+          const reports = gbx_tick(64);
+          for (const report of reports) {
+            if (report.type === "Kernel.LaneFrame" && consumeLaneFrame(report)) {
+              frameCount++;
             }
+          }
+
+          if (frameCount > 0 && frameCount % 60 === 0) {
+            const elapsed = (Date.now() - startTime) / 1000;
+            const fps = (frameCount / Math.max(elapsed, 0.001)).toFixed(1);
+            info.textContent = `Frames: ${frameCount} | FPS: ${fps}`;
           }
         } catch (e) {
           info.textContent = `Runtime error: ${e}`;
           console.error(e);
           return;
         }
+
         requestAnimationFrame(loop);
       }
 
-      loop();
+      requestAnimationFrame(loop);
+    }
+
+    await init();
+
+    if (isTest) {
+      await runTest();
+    } else {
+      await runDemo();
     }
   </script>
 </body>

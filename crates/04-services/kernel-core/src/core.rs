@@ -81,6 +81,8 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
         self.ppu.reset();
         self.cycles_this_frame = 0;
         self.ppu_enabled = true;
+        self.cpu.halted = false;
+        self.cpu.enable_ime_pending = false;
         match model {
             Model::Dmg => {
                 // Classic DMG register defaults per Pan Docs reference.
@@ -94,6 +96,7 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
                 self.cpu.l = E::from_u8(0x4D);
                 self.cpu.sp = E::from_u16(0xFFFE);
                 self.cpu.pc = E::from_u16(0x0100);
+                self.cpu.ime = true;
 
                 // PPU post-boot defaults so the LCD begins in the enabled state.
                 self.bus.write8(E::from_u16(0xFF40), E::from_u8(0x91)); // LCDC
@@ -139,9 +142,10 @@ impl<E: Exec, B: Bus<E>> Core<E, B> {
             expected_len
         );
 
-        self.ppu.render_frame_bg(
+        self.ppu.render_frame(
             self.bus.ppu_io(),
             self.bus.ppu_vram(),
+            self.bus.ppu_oam(),
             out_rgba,
             self.config.frame_width,
             self.config.frame_height,

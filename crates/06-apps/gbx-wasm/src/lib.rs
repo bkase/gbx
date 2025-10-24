@@ -35,4 +35,4 @@ pub mod tests;
 mod ui;
 
 #[cfg(target_arch = "wasm32")]
-pub use ui::{gbx_consume_frame, gbx_init, gbx_tick};
+pub use ui::{gbx_consume_frame, gbx_debug_state, gbx_init, gbx_load_rom, gbx_tick};
