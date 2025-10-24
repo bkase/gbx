@@ -168,9 +168,14 @@ test_wasm_light() {
   local wasm_path=""
   if [ -n "${GBX_SKIP_TESTROMS:-}" ]; then
     build_wasm_app
-    wasm_path="target/wasm32-unknown-unknown/debug/app.wasm"
-    if [ ! -f "$wasm_path" ]; then
-      wasm_path="target/wasm32-unknown-unknown/release/app.wasm"
+    if [ -f "target/wasm32-unknown-unknown/debug/deps/transport_worker.wasm" ]; then
+      wasm_path="target/wasm32-unknown-unknown/debug/deps/transport_worker.wasm"
+    elif [ -f "target/wasm32-unknown-unknown/release/deps/transport_worker.wasm" ]; then
+      wasm_path="target/wasm32-unknown-unknown/release/deps/transport_worker.wasm"
+    elif [ -f "target/wasm32-unknown-unknown/release/transport_worker.wasm" ]; then
+      wasm_path="target/wasm32-unknown-unknown/release/transport_worker.wasm"
+    else
+      wasm_path="target/wasm32-unknown-unknown/debug/deps/tests-8c3620de37a2c7a8.wasm"
     fi
   else
     build_fabric_worker_wasm
@@ -179,6 +184,7 @@ test_wasm_light() {
 
   if [ ! -f "$wasm_path" ]; then
     echo "error: expected wasm artifact at $wasm_path" >&2
+    find target/wasm32-unknown-unknown -maxdepth 3 -type f -name '*.wasm' 2>/dev/null || true
     exit 1
   fi
 
