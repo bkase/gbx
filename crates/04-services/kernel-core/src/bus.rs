@@ -26,6 +26,8 @@ pub trait SerialIo {
 pub struct BusScalar {
     /// Entire cartridge ROM contents.
     pub rom: Arc<[u8]>,
+    /// Currently selected switchable ROM bank (bank 0 fixed).
+    pub rom_bank: usize,
     /// Video RAM region used by the PPU.
     pub vram: Box<[u8; 0x2000]>,
     /// Work RAM shared by the CPU.
@@ -73,8 +75,9 @@ pub struct BusScalar {
 impl BusScalar {
     /// Creates a bus using the supplied ROM bytes.
     pub fn new(rom: Arc<[u8]>) -> Self {
-        Self {
+        let mut bus = Self {
             rom,
+            rom_bank: 1,
             vram: Box::new([0; 0x2000]),
             wram: Box::new([0; 0x2000]),
             oam: Box::new([0; 0xA0]),
@@ -96,7 +99,9 @@ impl BusScalar {
             timer_tima_write: None,
             timer_tma_write: None,
             timer_tac_write: None,
-        }
+        };
+        bus.set_rom_bank(1);
+        bus
     }
 
     /// Replaces the ROM contents.
@@ -111,6 +116,7 @@ impl BusScalar {
         self.timer_tima_write = None;
         self.timer_tma_write = None;
         self.timer_tac_write = None;
+        self.set_rom_bank(1);
     }
 
     /// Returns the accumulated serial log as a string and clears the buffer.
@@ -135,6 +141,19 @@ impl BusScalar {
     #[inline]
     pub(crate) fn io_sc_index() -> usize {
         IoRegs::SC
+    }
+
+    fn rom_bank_count(&self) -> usize {
+        (self.rom.len() + 0x3FFF) / 0x4000
+    }
+
+    pub(crate) fn set_rom_bank(&mut self, bank: usize) {
+        let total = self.rom_bank_count().max(1);
+        let mut bank = bank % total;
+        if total > 1 && bank == 0 {
+            bank = 1;
+        }
+        self.rom_bank = bank;
     }
 
     const SERIAL_CYCLES_PER_BIT: u32 = 512;
@@ -314,11 +333,14 @@ impl IoRegs {
     pub const WY: usize = 0x4A;
     /// Window X position register offset.
     pub const WX: usize = 0x4B;
+    /// Speed switch register (CGB only; reads as 0xFF on DMG hardware).
+    pub const KEY1: usize = 0x4D;
 
     /// Creates zeroed IO registers.
     pub fn new() -> Self {
         let mut regs = [0; 0x80];
         regs[Self::IF] = 0xE0;
+        regs[Self::KEY1] = 0xFF;
         Self { regs }
     }
 
@@ -338,6 +360,7 @@ impl IoRegs {
         match idx {
             Self::SC => self.sc(),
             Self::TAC => self.tac(),
+            Self::KEY1 => 0xFF,
             _ => self.regs[idx],
         }
     }
@@ -345,10 +368,16 @@ impl IoRegs {
     /// Writes an IO register.
     #[inline]
     pub fn write(&mut self, idx: usize, value: u8) {
-        if idx == Self::SC {
-            self.set_sc(value);
-        } else {
-            self.regs[idx] = value;
+        match idx {
+            Self::SC => self.set_sc(value),
+            Self::KEY1 => {
+                // DMG hardware ignores writes; keep the register reading as 0xFF so
+                // detection code recognises the model correctly.
+                self.regs[idx] = 0xFF;
+            }
+            _ => {
+                self.regs[idx] = value;
+            }
         }
     }
 

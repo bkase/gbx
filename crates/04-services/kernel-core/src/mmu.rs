@@ -5,7 +5,13 @@ use crate::exec::{Exec, Scalar};
 pub fn read8_scalar(bus: &mut BusScalar, addr: <Scalar as Exec>::U16) -> <Scalar as Exec>::U8 {
     let addr = <Scalar as Exec>::to_u16(addr);
     match addr {
-        0x0000..=0x7FFF => bus.rom.get(addr as usize).copied().unwrap_or(0xFF),
+        0x0000..=0x3FFF => bus.rom.get(addr as usize).copied().unwrap_or(0xFF),
+        0x4000..=0x7FFF => {
+            let bank = bus.rom_bank;
+            let offset = (addr - 0x4000) as usize;
+            let index = bank.saturating_mul(0x4000).saturating_add(offset);
+            bus.rom.get(index).copied().unwrap_or(0xFF)
+        }
         0x8000..=0x9FFF => bus.vram[(addr - 0x8000) as usize],
         0xA000..=0xBFFF => 0xFF, // No MBC for M1 scope.
         0xC000..=0xDFFF => bus.wram[(addr - 0xC000) as usize],
@@ -44,8 +50,19 @@ pub fn write8_scalar(
 ) {
     let addr = <Scalar as Exec>::to_u16(addr);
     match addr {
-        0x0000..=0x7FFF => {
-            // ROM is immutable; ignore writes for the no-MBC configuration.
+        0x0000..=0x1FFF => {
+            // Cartridge RAM enable (unsupported)
+        }
+        0x2000..=0x3FFF => {
+            let value = <Scalar as Exec>::to_u8(value);
+            let bank = (value & 0x1F) as usize;
+            bus.set_rom_bank(bank);
+        }
+        0x4000..=0x5FFF => {
+            // High ROM bank bits / RAM bank (ignored for current cartridges)
+        }
+        0x6000..=0x7FFF => {
+            // Banking mode select (ignored)
         }
         0x8000..=0x9FFF => {
             bus.vram[(addr - 0x8000) as usize] = value;

@@ -834,3 +834,9 @@ fn lockstep_cpu_instrs_10_bit_ops() -> Result<()> {
 fn lockstep_cpu_instrs_11_op_a_hl() -> Result<()> {
     run_lockstep("blargg/cpu_instrs/individual/11-op a,(hl).gb", 200_000)
 }
+
+#[test]
+#[ignore = "Aggregate ROM still diverges while bringing up scalar core coverage"]
+fn lockstep_cpu_instrs_aggregate_suite() -> Result<()> {
+    run_lockstep("blargg/cpu_instrs/cpu_instrs.gb", 5_000_000)
+}
