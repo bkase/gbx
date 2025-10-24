@@ -102,7 +102,12 @@ lint_workspace() {
 build_workspace() {
   assets_testroms
   export RUSTFLAGS="$NATIVE_RUSTFLAGS"
-  cargo build --all-targets
+  if [ -n "${GBX_SKIP_TESTROMS:-}" ]; then
+    note "GBX_SKIP_TESTROMS set: running cargo check for workspace"
+    cargo check --all-targets
+  else
+    cargo build --all-targets
+  fi
 }
 
 build_wasm_app() {

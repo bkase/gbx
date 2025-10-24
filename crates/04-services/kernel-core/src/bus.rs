@@ -72,6 +72,7 @@ pub struct BusScalar {
     pub timer_tac_write: Option<(u8, u8)>,
 }
 
+#[allow(clippy::manual_div_ceil)]
 impl BusScalar {
     /// Creates a bus using the supplied ROM bytes.
     pub fn new(rom: Arc<[u8]>) -> Self {
