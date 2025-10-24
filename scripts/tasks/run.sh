@@ -202,6 +202,10 @@ test_demo() {
   demo=$((base + 1))
   note "demo test on port $demo"
   build_fabric_worker_wasm
+  mkdir -p web/roms
+  if [ ! -f web/roms/tetris.gb ]; then
+    cp third_party/testroms/c-sp-v7.0/blargg/cpu_instrs/cpu_instrs.gb web/roms/tetris.gb
+  fi
   npm install --silent >/dev/null
   bash scripts/run-browser-test.sh web "$demo" tests/demo_browser_test.js
 }

@@ -19,6 +19,7 @@ target/
 # Web build output
 web/dist/
 web/pkg/transport_worker.wasm
+web/roms/
 tests/wasm/pkg/
 
 node_modules/
