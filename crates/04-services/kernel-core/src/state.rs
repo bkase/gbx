@@ -71,6 +71,10 @@ pub struct TimersState {
     pub timer_input: bool,
     /// Serialized TIMA state machine.
     pub tima_state: u8,
+    /// Pending TIMA reload value captured from TMA.
+    pub pending_reload_value: u8,
+    /// Remaining delay steps before the reload applies.
+    pub reload_delay: u8,
 }
 
 /// PPU stub persisted state.
@@ -97,9 +101,11 @@ impl From<&Timers> for TimersState {
             timer_input: t.timer_input,
             tima_state: match t.tima_state {
                 TimaState::Running => 0,
-                TimaState::Reloading => 1,
-                TimaState::Reloaded => 2,
+                TimaState::OverflowPending => 1,
+                TimaState::Reloading => 2,
             },
+            pending_reload_value: t.pending_reload_value,
+            reload_delay: t.reload_delay,
         }
     }
 }
@@ -110,10 +116,12 @@ impl Timers {
         self.div_counter = state.div_counter;
         self.timer_input = state.timer_input;
         self.tima_state = match state.tima_state {
-            1 => TimaState::Reloading,
-            2 => TimaState::Reloaded,
+            1 => TimaState::OverflowPending,
+            2 => TimaState::Reloading,
             _ => TimaState::Running,
         };
+        self.pending_reload_value = state.pending_reload_value;
+        self.reload_delay = state.reload_delay;
     }
 }
 

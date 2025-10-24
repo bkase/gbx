@@ -98,8 +98,8 @@ impl TimerIo for BusScalar {
 pub(crate) enum TimaState {
     #[default]
     Running,
+    OverflowPending,
     Reloading,
-    Reloaded,
 }
 
 /// Game Boy timer block (DIV + TIMA/TMA/TAC).
@@ -108,6 +108,8 @@ pub struct Timers {
     pub(crate) div_counter: u16,
     pub(crate) timer_input: bool,
     pub(crate) tima_state: TimaState,
+    pub(crate) pending_reload_value: u8,
+    pub(crate) reload_delay: u8,
 }
 
 impl Timers {
@@ -117,6 +119,8 @@ impl Timers {
             div_counter: 8,
             timer_input: false,
             tima_state: TimaState::Running,
+            pending_reload_value: 0,
+            reload_delay: 0,
         }
     }
 
@@ -125,6 +129,8 @@ impl Timers {
         self.div_counter = 8;
         self.timer_input = false;
         self.tima_state = TimaState::Running;
+        self.pending_reload_value = 0;
+        self.reload_delay = 0;
     }
 
     /// Initializes the divider register to the post-boot hardware value.
@@ -137,6 +143,8 @@ impl Timers {
         self.timer_input = self.compute_timer_input(io.read_tac());
         self.tima_state = TimaState::Running;
         io.write_div((self.div_counter >> 8) as u8);
+        self.pending_reload_value = io.read_tma();
+        self.reload_delay = 0;
     }
 
     /// Returns internal counters for diagnostics.
@@ -144,11 +152,11 @@ impl Timers {
         (
             self.div_counter,
             self.timer_input,
-            matches!(self.tima_state, TimaState::Reloading),
+            matches!(self.tima_state, TimaState::OverflowPending),
             match self.tima_state {
                 TimaState::Running => 0,
-                TimaState::Reloading => 1,
-                TimaState::Reloaded => 2,
+                TimaState::OverflowPending => 1,
+                TimaState::Reloading => 2,
             },
         )
     }
@@ -168,11 +176,9 @@ impl Timers {
 
         let mut remaining = cycles;
         while remaining > 0 {
-            self.advance_tima_state(io);
-
             let step = remaining.min(4);
+            self.advance_tima_state(step, io);
             self.apply_div_increment(step as u16, io);
-
             remaining = remaining.saturating_sub(step);
         }
     }
@@ -193,12 +199,25 @@ impl Timers {
             self.timer_input = new_input;
         }
 
-        if io.take_tima_write().is_some() && matches!(self.tima_state, TimaState::Reloaded) {
-            // Writes ignored per hardware, state unchanged.
+        if let Some(value) = io.take_tima_write() {
+            match self.tima_state {
+                TimaState::Running => {
+                    io.write_tima(value);
+                }
+                TimaState::OverflowPending => {
+                    io.write_tima(value);
+                    self.tima_state = TimaState::Running;
+                    self.reload_delay = 0;
+                }
+                TimaState::Reloading => {
+                    io.write_tima(self.pending_reload_value);
+                }
+            }
         }
 
         while let Some(value) = io.take_tma_write() {
-            if !matches!(self.tima_state, TimaState::Running) {
+            self.pending_reload_value = value;
+            if matches!(self.tima_state, TimaState::Reloading) {
                 io.write_tima(value);
             }
         }
@@ -237,12 +256,14 @@ impl Timers {
     fn increment_tima<T: TimerIo>(&mut self, io: &mut T) {
         let tima = io.read_tima();
         if tima == 0xFF {
-            io.write_tima(io.read_tma());
-            self.tima_state = TimaState::Reloading;
+            io.write_tima(0);
+            self.pending_reload_value = io.read_tma();
+            self.reload_delay = 4;
+            self.tima_state = TimaState::OverflowPending;
             if std::env::var_os("GBX_TRACE_TIMER").is_some() {
                 eprintln!(
                     "TIMA overflow: scheduling reload with TMA={:02X}",
-                    io.read_tma()
+                    self.pending_reload_value
                 );
             }
         } else {
@@ -253,23 +274,29 @@ impl Timers {
         }
     }
 
-    fn advance_tima_state<T: TimerIo>(&mut self, io: &mut T) {
+    fn advance_tima_state<T: TimerIo>(&mut self, cycles: u32, io: &mut T) {
         match self.tima_state {
             TimaState::Running => {}
-            TimaState::Reloading => {
-                let mut if_reg = io.read_if();
-                if_reg |= 0x04;
-                io.write_if(if_reg);
-                if std::env::var_os("GBX_TRACE_TIMER").is_some() {
-                    eprintln!(
-                        "TIMA reloaded to {:02X}; IF now {:02X}",
-                        io.read_tima(),
-                        if_reg
-                    );
+            TimaState::OverflowPending => {
+                if self.reload_delay > 0 {
+                    self.reload_delay = self.reload_delay.saturating_sub(cycles as u8);
                 }
-                self.tima_state = TimaState::Reloaded;
+                if self.reload_delay == 0 {
+                    io.write_tima(self.pending_reload_value);
+                    let mut if_reg = io.read_if();
+                    if_reg |= 0x04;
+                    io.write_if(if_reg);
+                    if std::env::var_os("GBX_TRACE_TIMER").is_some() {
+                        eprintln!(
+                            "TIMA reloaded to {:02X}; IF now {:02X}",
+                            io.read_tima(),
+                            if_reg
+                        );
+                    }
+                    self.tima_state = TimaState::Reloading;
+                }
             }
-            TimaState::Reloaded => {
+            TimaState::Reloading => {
                 self.tima_state = TimaState::Running;
             }
         }

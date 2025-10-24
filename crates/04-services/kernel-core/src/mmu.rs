@@ -119,6 +119,9 @@ pub fn write8_scalar(
                     return;
                 }
                 if idx == IoRegs::IF {
+                    if std::env::var_os("GBX_TRACE_TIMER").is_some() {
+                        eprintln!("IF write {:02X}", value);
+                    }
                     bus.io.set_if(value);
                 } else {
                     bus.io.write(idx, value);
@@ -129,6 +132,9 @@ pub fn write8_scalar(
             bus.hram[(addr - 0xFF80) as usize] = value;
         }
         0xFFFF => {
+            if std::env::var_os("GBX_TRACE_TIMER").is_some() {
+                eprintln!("IE write {:02X}", value);
+            }
             bus.ie = value;
         }
     }

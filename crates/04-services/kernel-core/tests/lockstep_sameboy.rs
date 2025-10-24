@@ -604,6 +604,31 @@ fn dump_divergence(
          bits_remaining={serial_bits_remaining} transfers={serial_transfers}"
     );
 
+    let mut ours_wram = [0u8; 32];
+    let mut ref_wram = [0u8; 32];
+    for (idx, byte) in ours_wram.iter_mut().enumerate() {
+        *byte = ours.read8(0xC000 + idx as u16);
+    }
+    for (idx, byte) in ref_wram.iter_mut().enumerate() {
+        *byte = oracle.safe_read(0xC000 + idx as u16);
+    }
+    eprintln!(
+        "WRAM ours[C000..C020]={}",
+        ours_wram
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    eprintln!(
+        "WRAM ref [C000..C020]={}",
+        ref_wram
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+
     if std::env::var_os("GBX_TRACE_TIMA").is_some() {
         let ours_tima = ours.read8(0xFF05);
         let ours_tma = ours.read8(0xFF06);
@@ -854,4 +879,13 @@ fn lockstep_cpu_instrs_aggregate_suite() -> Result<()> {
 #[ignore = "Serial timing still diverges"]
 fn lockstep_blargg_mem_timing() -> Result<()> {
     run_lockstep("blargg/mem_timing/mem_timing.gb", 500_000)
+}
+
+#[test]
+#[ignore = "Mooneye timer_if investigation"]
+fn lockstep_mooneye_timer_if() -> Result<()> {
+    run_lockstep(
+        "mooneye-test-suite-wilbertpol/acceptance/timer/timer_if.gb",
+        1_000_000,
+    )
 }
