@@ -121,10 +121,20 @@ build_fabric_worker_wasm() {
   export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"
   local cargo_cmd
   cargo_cmd="$(command -v cargo)"
+  if ! have wasm-pack; then
+    note "wasm-pack not found; installing via cargo"
+    with_rustup_toolchain cargo install --locked wasm-pack || note "warning: cargo install wasm-pack failed"
+  fi
+  if ! have wasm-pack; then
+    echo "error: wasm-pack is required for wasm builds but could not be installed" >&2
+    exit 1
+  fi
   CARGO="$cargo_cmd" with_rustup_toolchain wasm-pack build --target web crates/06-apps/gbx-wasm \
     --out-dir ../../../web/pkg --out-name fabric_worker_wasm \
     -- -Z build-std=std,panic_abort
-  wasm-tools print web/pkg/fabric_worker_wasm_bg.wasm | grep -E "(import.*memory)" | head -1
+  if have wasm-tools && [ -f web/pkg/fabric_worker_wasm_bg.wasm ]; then
+    wasm-tools print web/pkg/fabric_worker_wasm_bg.wasm | grep -E "(import.*memory)" | head -1 || true
+  fi
 }
 
 test_workspace() {
