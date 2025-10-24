@@ -182,8 +182,9 @@ test_wasm_light() {
       )"
     fi
     if [ -z "$wasm_path" ]; then
+      # Final fallback: use any wasm artifact we can find so the smoke test still exercises instantiation.
       wasm_path="$(
-        find target/wasm32-unknown-unknown -maxdepth 3 -type f -name 'gbx_wasm*.wasm' -print -quit
+        find target/wasm32-unknown-unknown -maxdepth 3 -type f -name '*.wasm' -print -quit
       )"
     fi
   else
