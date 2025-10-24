@@ -1,7 +1,6 @@
 //! Mooneye timer and interrupt acceptance ROMs checked via the Fibonacci oracle.
 
 use kernel_core::{BusScalar, Core, Exec, Model, Scalar};
-use testdata;
 
 const PASS_PATTERN: [u8; 6] = [3, 5, 8, 13, 21, 34];
 const FAIL_PATTERN: [u8; 6] = [0x42; 6];

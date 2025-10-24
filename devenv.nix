@@ -41,29 +41,9 @@ in {
     NEXTEST_HIDE_PROGRESS_BAR = "0";
   };
 
-  # Native rustflags for stricter compilation
-  # Set this manually in build commands to avoid breaking web builds
-  env.NATIVE_RUSTFLAGS = lib.concatStringsSep " " [
-    "-D" "warnings"
-    "-D" "missing_docs"
-  ];
-
-  # WASM-specific rustflags for shared linear memory
-  env.WASM_RUSTFLAGS = lib.concatStringsSep " " [
-    "-Z" "unstable-options"
-    "-C" "panic=immediate-abort"
-    "-C" "target-feature=+atomics,+bulk-memory,+mutable-globals"
-    "-C" "link-arg=--shared-memory"
-    "-C" "link-arg=--import-memory"
-    "-C" "link-arg=--export=__wasm_init_tls"
-    "-C" "link-arg=--export=__wasm_init_memory"
-    "-C" "link-arg=--export=__tls_size"
-    "-C" "link-arg=--export=__tls_align"
-    "-C" "link-arg=--export=__tls_base"
-    "-C" "link-arg=--max-memory=67108864"
-    "-D" "warnings"
-    "-D" "missing_docs"
-  ];
+  # Single-source rustflags (shared with cloud runners)
+  env.NATIVE_RUSTFLAGS = builtins.readFile ./scripts/env/NATIVE_RUSTFLAGS;
+  env.WASM_RUSTFLAGS = builtins.readFile ./scripts/env/WASM_RUSTFLAGS;
 
   enterShell = ''
     # Ensure wasm-pack is installed via cargo
@@ -147,140 +127,20 @@ in {
   '';
 
   # Define tasks first so hooks can reference them
-  tasks."assets:testroms".exec = ''
-    set -euo pipefail
-
-    dest="third_party/testroms/c-sp-v7.0"
-    if [ -d "$dest/mooneye-test-suite" ]; then
-      exit 0
-    fi
-
-    mkdir -p third_party/testroms
-
-    tmp="$(mktemp)"
-    curl -L -o "$tmp" "https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip"
-
-    echo "b9a9d7a1075aa35a3d07c07c34974048672d8520dca9e07a50178f5860c3832c  $tmp" | shasum -a 256 -c -
-
-    staging="$(mktemp -d)"
-    unzip -q "$tmp" -d "$staging"
-    rm "$tmp"
-
-    rm -rf "$dest"
-    mkdir -p "$dest"
-    find "$staging" -mindepth 1 -maxdepth 1 -print0 | while IFS= read -r -d "" entry; do
-      name="$(basename "$entry")"
-      mv "$entry" "$dest/$name"
-    done
-    rm -rf "$staging"
-  '';
-
-  tasks."format:workspace".exec = "cargo fmt --all";
-  tasks."format:check".exec = "cargo fmt --all -- --check";
-  tasks."lint:workspace".exec =
-    ''
-      devenv tasks run assets:testroms
-      python3 scripts/check-layer-deps.py
-      cargo clippy --all-targets --all-features -- -D warnings -D clippy::undocumented_unsafe_blocks
-    '';
-  tasks."build:workspace".exec = ''
-    devenv tasks run assets:testroms
-    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
-    cargo build --all-targets
-  '';
-  tasks."build:wasm".exec = ''
-    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
-    cargo build --target wasm32-unknown-unknown -p app
-  '';
-  tasks."build:fabric-worker-wasm".exec = ''
-    set -euo pipefail
-
-    echo "Building fabric-worker-wasm with wasm-pack..."
-    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$WASM_RUSTFLAGS"
-    wasm-pack build --target web crates/06-apps/gbx-wasm --out-dir ../../../web/pkg --out-name fabric_worker_wasm -- -Z build-std=std,panic_abort
-
-    echo "Verifying memory is imported..."
-    wasm-tools print web/pkg/fabric_worker_wasm_bg.wasm | grep -E "(import.*memory)" | head -1
-    echo "✅ Memory import successful! fabric-worker-wasm ready for shared memory."
-  '';
-  tasks."test:workspace".exec = ''
-    devenv tasks run assets:testroms
-    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
-    cargo test --all-targets
-    cargo test -p transport-fabric --features proptest --test mailbox_tests
-  '';
-  tasks."test:golden".exec = ''
-    devenv tasks run assets:testroms
-    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
-    cargo test -p tests transport_schema_goldens_v1
-    cargo test -p tests inspector_ndjson_matches_golden
-  '';
-
-  # Tight test discipline tasks (stable API for CI)
-  tasks."test:fast".exec = ''
-    devenv tasks run assets:testroms
-    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
-    cargo nextest run --profile fast
-  '';
-  tasks."test:slow".exec = ''
-    devenv tasks run assets:testroms
-    export RUSTFLAGS="$NATIVE_RUSTFLAGS"
-    cargo nextest run --profile slow --run-ignored ignored-only --features loom
-  '';
-  tasks."test:wasm-smoke".exec = ''
-    set -euo pipefail
-
-    repo_name="$(basename "$PWD")"
-    hash_hex="$(printf "%s" "$repo_name" | sha256sum | cut -c1-8)"
-    hash_dec=$((16#$hash_hex))
-    wasm_port=$((8000 + hash_dec % 999))
-    echo "Using wasm smoke test port: ''${wasm_port}"
-
-    echo "Building fabric-worker-wasm with wasm-pack..."
-    devenv tasks run build:fabric-worker-wasm
-
-    echo "Copying artifacts to tests/wasm/pkg..."
-    rm -rf tests/wasm/pkg
-    mkdir -p tests/wasm/pkg
-    cp web/pkg/fabric_worker_wasm.js tests/wasm/pkg/
-    cp web/pkg/fabric_worker_wasm_bg.wasm tests/wasm/pkg/
-    cp web/pkg/fabric_worker_wasm_bg.wasm.d.ts tests/wasm/pkg/ 2>/dev/null || true
-    cp web/pkg/fabric_worker_wasm.d.ts tests/wasm/pkg/ 2>/dev/null || true
-    cp web/worker.js tests/wasm/pkg/
-
-    npm install --silent >/dev/null
-    bash scripts/run-browser-test.sh tests/wasm "''${wasm_port}" tests/wasm_browser_test.js
-  '';
-
-  tasks."test:wasm-light".exec = ''
-    set -euo pipefail
-
-    repo_name="$(basename "$PWD")"
-    hash_hex="$(printf "%s" "$repo_name" | sha256sum | cut -c1-8)"
-    hash_dec=$((16#$hash_hex))
-    wasm_port=$((8000 + hash_dec % 999))
-    echo "Using wasm light test port: ''${wasm_port}"
-
-    npm install --silent >/dev/null
-    bash scripts/run-browser-test.sh tests/wasm "''${wasm_port}" tests/wasm_browser_test.js
-  '';
-
-  tasks."test:demo".exec = ''
-    set -euo pipefail
-
-    repo_name="$(basename "$PWD")"
-    hash_hex="$(printf "%s" "$repo_name" | sha256sum | cut -c1-8)"
-    hash_dec=$((16#$hash_hex))
-    base_port=$((8000 + hash_dec % 999))
-    demo_port=$((base_port + 1))
-    echo "Using demo test ports: wasm=''${base_port} demo=''${demo_port}"
-
-    echo "Building UI demo with wasm-pack..."
-    devenv tasks run build:fabric-worker-wasm
-
-    npm install --silent >/dev/null
-    bash scripts/run-browser-test.sh web "''${demo_port}" tests/demo_browser_test.js
-  '';
+  tasks."assets:testroms".exec = "bash scripts/tasks/run.sh assets:testroms";
+  tasks."format:workspace".exec = "bash scripts/tasks/run.sh format:workspace";
+  tasks."format:check".exec = "bash scripts/tasks/run.sh format:check";
+  tasks."lint:workspace".exec = "bash scripts/tasks/run.sh lint:workspace";
+  tasks."build:workspace".exec = "bash scripts/tasks/run.sh build:workspace";
+  tasks."build:wasm".exec = "bash scripts/tasks/run.sh build:wasm";
+  tasks."build:fabric-worker-wasm".exec = "bash scripts/tasks/run.sh build:fabric-worker-wasm";
+  tasks."test:workspace".exec = "bash scripts/tasks/run.sh test:workspace";
+  tasks."test:golden".exec = "bash scripts/tasks/run.sh test:golden";
+  tasks."test:fast".exec = "bash scripts/tasks/run.sh test:fast";
+  tasks."test:slow".exec = "bash scripts/tasks/run.sh test:slow";
+  tasks."test:wasm-smoke".exec = "bash scripts/tasks/run.sh test:wasm-smoke";
+  tasks."test:wasm-light".exec = "bash scripts/tasks/run.sh test:wasm-light";
+  tasks."test:demo".exec = "bash scripts/tasks/run.sh test:demo";
 
   # Git hooks for code quality enforcement
   git-hooks.hooks = {

@@ -230,9 +230,9 @@ impl PpuStub {
                     continue;
                 }
 
-                let win_y = (y as u8).wrapping_sub(wy) as usize;
+                let win_y = usize::from((y as u8).wrapping_sub(wy));
                 let tile_row = (win_y >> 3) & 31;
-                let row_in_tile = (win_y & 0x07) as usize;
+                let row_in_tile = win_y & 0x07;
 
                 for x in 0..width_px {
                     let wx_adjusted = (wx as i16) - 7;
@@ -240,9 +240,9 @@ impl PpuStub {
                         continue;
                     }
 
-                    let win_x = ((x as i16) - wx_adjusted) as usize;
+                    let win_x = ((x as i16) - wx_adjusted) as u16 as usize;
                     let tile_col = (win_x >> 3) & 31;
-                    let col_in_tile = (win_x & 0x07) as usize;
+                    let col_in_tile = win_x & 0x07;
 
                     let map_index = tile_row * 32 + tile_col;
                     let map_addr = map_base.wrapping_add(map_index as u16);

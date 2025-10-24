@@ -212,9 +212,14 @@ impl Instance {
         let rom_copy = Arc::clone(&rom);
         self.core.load_rom(rom);
         self.core.reset_post_boot(Model::Dmg);
-        self.boot = match &mut self.core {
-            AnyCore::Scalar(core) => Some(BootSequence::new(core.as_mut(), rom_copy.as_ref())),
-            AnyCore::Simd2(_) | AnyCore::Simd4(_) => None,
+        let blank_rom = rom_copy.iter().all(|&byte| byte == 0);
+        self.boot = if blank_rom {
+            None
+        } else {
+            match &mut self.core {
+                AnyCore::Scalar(core) => Some(BootSequence::new(core.as_mut(), rom_copy.as_ref())),
+                AnyCore::Simd2(_) | AnyCore::Simd4(_) => None,
+            }
         };
         self.next_frame_id = 0;
     }
@@ -322,8 +327,12 @@ impl Instance {
 
     pub fn produce_frame(&mut self, expected_len: usize) -> Option<(Arc<[u8]>, Option<SlotSpan>)> {
         let this = self as *mut Instance;
-        self.sink
-            .produce_frame(expected_len, |buf| unsafe { (&mut *this).render_into(buf) })
+        self.sink.produce_frame(expected_len, |buf| {
+            // SAFETY: `this` is a raw pointer to `self`. The closure is executed
+            // synchronously by `produce_frame`, so no other references to `self`
+            // exist while we render the frame into `buf`.
+            unsafe { (&mut *this).render_into(buf) }
+        })
     }
 }
 
@@ -416,13 +425,12 @@ impl BootSequence {
 fn capture_logo_tiles(bus: &BusScalar) -> Vec<[u8; 64]> {
     let mut tiles = vec![[0u8; 64]; BOOT_TILE_COUNT + 1];
     let base = (0x8010 - 0x8000) as usize;
-    for tile_id in 1..=BOOT_TILE_COUNT {
-        let offset = base + (tile_id - 1) * 16;
+    for (tile_idx, tile) in tiles.iter_mut().enumerate().skip(1).take(BOOT_TILE_COUNT) {
+        let offset = base + (tile_idx - 1) * 16;
         if offset + 16 > bus.vram.len() {
             break;
         }
         let tile_bytes = &bus.vram[offset..offset + 16];
-        let tile = &mut tiles[tile_id];
         for row in 0..8 {
             let lo = tile_bytes[row * 2];
             let hi = tile_bytes[row * 2 + 1];

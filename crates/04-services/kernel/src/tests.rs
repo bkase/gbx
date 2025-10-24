@@ -168,6 +168,15 @@ fn debug_step_instruction_advances_pc() {
     let group = 5;
     load_blank_rom(&service, group);
 
+    service.try_submit(&KernelCmd::Debug(DebugCmd::Snapshot { group }));
+    let pc_before = drain_debug(&service, 4)
+        .into_iter()
+        .find_map(|rep| match rep {
+            KernelRep::Debug(DebugRep::Snapshot(snapshot)) => Some(snapshot.cpu.pc),
+            _ => None,
+        })
+        .expect("snapshot after load");
+
     let outcome = service.try_submit(&KernelCmd::Debug(DebugCmd::StepInstruction {
         group,
         count: 1,
@@ -189,7 +198,11 @@ fn debug_step_instruction_advances_pc() {
         .expect("stepped report");
 
     assert!(stepped.0 > 0, "instruction step should consume cycles");
-    assert_eq!(stepped.1, 0x0101, "PC should advance by one instruction");
+    assert_eq!(
+        stepped.1,
+        pc_before.wrapping_add(1),
+        "PC should advance by one instruction"
+    );
 
     // Snapshot after stepping to confirm state was committed.
     service.try_submit(&KernelCmd::Debug(DebugCmd::Snapshot { group }));
@@ -200,7 +213,7 @@ fn debug_step_instruction_advances_pc() {
             _ => None,
         })
         .expect("snapshot after step");
-    assert_eq!(snapshot.cpu.pc, 0x0101);
+    assert_eq!(snapshot.cpu.pc, pc_before.wrapping_add(1));
 }
 
 #[test]
