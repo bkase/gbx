@@ -233,36 +233,54 @@ install_wasm_tools_binary() {
 }
 
 ensure_cli_tools() {
-  install_wasm_pack_binary || {
-    local tmp_dir
-    tmp_dir="$(mktemp -d "${TMP_ROOT}/wasm-pack.XXXXXX")"
-    CARGO_TARGET_DIR="$tmp_dir" cargo install --locked wasm-pack || true
-    rm -rf "$tmp_dir"
-  }
-  install_nextest_binary || {
-    local tmp_dir
-    tmp_dir="$(mktemp -d "${TMP_ROOT}/nextest.XXXXXX")"
-    CARGO_TARGET_DIR="$tmp_dir" cargo install --locked cargo-nextest || true
-    rm -rf "$tmp_dir"
-  }
-  install_wasm_tools_binary || {
-    local tmp_dir
-    tmp_dir="$(mktemp -d "${TMP_ROOT}/wasm-tools.XXXXXX")"
-    CARGO_TARGET_DIR="$tmp_dir" cargo install --locked wasm-tools || true
-    rm -rf "$tmp_dir"
-  }
+  local require_wasm_tools=1
+  local require_nextest=1
+  if [ -n "${GBX_SKIP_TESTROMS:-}" ]; then
+    note "GBX_SKIP_TESTROMS set: skipping wasm-pack/cargo-nextest/wasm-tools installs"
+    require_wasm_tools=0
+    require_nextest=0
+  fi
+
+  if [ "$require_wasm_tools" -eq 1 ]; then
+    install_wasm_pack_binary || {
+      local tmp_dir
+      tmp_dir="$(mktemp -d "${TMP_ROOT}/wasm-pack.XXXXXX")"
+      CARGO_TARGET_DIR="$tmp_dir" cargo install --locked wasm-pack || true
+      rm -rf "$tmp_dir"
+    }
+    install_wasm_tools_binary || {
+      local tmp_dir
+      tmp_dir="$(mktemp -d "${TMP_ROOT}/wasm-tools.XXXXXX")"
+      CARGO_TARGET_DIR="$tmp_dir" cargo install --locked wasm-tools || true
+      rm -rf "$tmp_dir"
+    }
+  fi
+
+  if [ "$require_nextest" -eq 1 ]; then
+    install_nextest_binary || {
+      local tmp_dir
+      tmp_dir="$(mktemp -d "${TMP_ROOT}/nextest.XXXXXX")"
+      CARGO_TARGET_DIR="$tmp_dir" cargo install --locked cargo-nextest || true
+      rm -rf "$tmp_dir"
+    }
+  fi
+
   rm -rf "$HOME/.cargo/registry/index" "$HOME/.cargo/registry/cache" "$HOME/.cargo/git"
-  for cmd in wasm-pack cargo-nextest wasm-tools; do
+
+  local required=()
+  if [ "$require_wasm_tools" -eq 1 ]; then
+    required+=(wasm-pack wasm-tools)
+  fi
+  if [ "$require_nextest" -eq 1 ]; then
+    required+=(cargo-nextest)
+  fi
+
+  for cmd in "${required[@]}"; do
     if have "$cmd"; then
       local path
       path="$(command -v "$cmd")"
       note "Using $path"
     else
-      note "Warning: $cmd not installed"
-    fi
-  done
-  for cmd in wasm-pack cargo-nextest wasm-tools; do
-    if ! have "$cmd"; then
       note "Error: required tool $cmd is unavailable after setup"
       exit 1
     fi

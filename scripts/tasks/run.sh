@@ -165,8 +165,24 @@ test_wasm_smoke() {
 
 test_wasm_light() {
   note "wasm node smoke test"
-  build_fabric_worker_wasm
-  node tests/wasm_node_smoke.js web/pkg/fabric_worker_wasm_bg.wasm
+  local wasm_path=""
+  if [ -n "${GBX_SKIP_TESTROMS:-}" ]; then
+    build_wasm_app
+    wasm_path="target/wasm32-unknown-unknown/debug/app.wasm"
+    if [ ! -f "$wasm_path" ]; then
+      wasm_path="target/wasm32-unknown-unknown/release/app.wasm"
+    fi
+  else
+    build_fabric_worker_wasm
+    wasm_path="web/pkg/fabric_worker_wasm_bg.wasm"
+  fi
+
+  if [ ! -f "$wasm_path" ]; then
+    echo "error: expected wasm artifact at $wasm_path" >&2
+    exit 1
+  fi
+
+  node tests/wasm_node_smoke.js "$wasm_path"
 }
 
 test_demo() {
