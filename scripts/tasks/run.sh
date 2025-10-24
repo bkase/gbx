@@ -193,6 +193,12 @@ test_wasm_light() {
   fi
 
   if [ -z "$wasm_path" ] || [ ! -f "$wasm_path" ]; then
+    note "fell back to fabric-worker build for wasm-light"
+    build_fabric_worker_wasm
+    wasm_path="web/pkg/fabric_worker_wasm_bg.wasm"
+  fi
+
+  if [ -z "$wasm_path" ] || [ ! -f "$wasm_path" ]; then
     echo "error: expected wasm artifact at $wasm_path" >&2
     find target/wasm32-unknown-unknown -maxdepth 3 -type f -name '*.wasm' 2>/dev/null || true
     exit 1
