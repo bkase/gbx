@@ -7,20 +7,6 @@ on:
       - main
 
 jobs:
-  codex-universal-parity:
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/openai/codex-universal:latest
-    env:
-      SKIP_TESTROMS: "1"
-      GBX_SKIP_TESTROMS: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Bootstrap (toolchains, npm, browser)
-        run: bash scripts/cloud/setup.sh
-      - name: Parity suite (fmt, lint, build native+wasm, nextest fast, wasm light)
-        run: bash scripts/tasks/run.sh ci-parity
-
   claude-approx-parity:
     runs-on: ubuntu-latest
     env:

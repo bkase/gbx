@@ -173,21 +173,25 @@ test_wasm_light() {
   local wasm_path=""
   if [ -n "${GBX_SKIP_TESTROMS:-}" ]; then
     build_wasm_app
-    if [ -f "target/wasm32-unknown-unknown/debug/deps/transport_worker.wasm" ]; then
-      wasm_path="target/wasm32-unknown-unknown/debug/deps/transport_worker.wasm"
-    elif [ -f "target/wasm32-unknown-unknown/release/deps/transport_worker.wasm" ]; then
-      wasm_path="target/wasm32-unknown-unknown/release/deps/transport_worker.wasm"
-    elif [ -f "target/wasm32-unknown-unknown/release/transport_worker.wasm" ]; then
-      wasm_path="target/wasm32-unknown-unknown/release/transport_worker.wasm"
-    else
-      wasm_path="target/wasm32-unknown-unknown/debug/deps/tests-8c3620de37a2c7a8.wasm"
+    wasm_path="$(
+      find target/wasm32-unknown-unknown -maxdepth 3 -type f -name 'app*.wasm' -print -quit
+    )"
+    if [ -z "$wasm_path" ]; then
+      wasm_path="$(
+        find target/wasm32-unknown-unknown -maxdepth 3 -type f -name 'transport_worker*.wasm' -print -quit
+      )"
+    fi
+    if [ -z "$wasm_path" ]; then
+      wasm_path="$(
+        find target/wasm32-unknown-unknown -maxdepth 3 -type f -name 'gbx_wasm*.wasm' -print -quit
+      )"
     fi
   else
     build_fabric_worker_wasm
     wasm_path="web/pkg/fabric_worker_wasm_bg.wasm"
   fi
 
-  if [ ! -f "$wasm_path" ]; then
+  if [ -z "$wasm_path" ] || [ ! -f "$wasm_path" ]; then
     echo "error: expected wasm artifact at $wasm_path" >&2
     find target/wasm32-unknown-unknown -maxdepth 3 -type f -name '*.wasm' 2>/dev/null || true
     exit 1
