@@ -1,5 +1,3 @@
-#![allow(clippy::too_many_arguments)]
-
 use crate::bus::BusScalar;
 use crate::bus_simd::BusSimd;
 use crate::core::CoreConfig;

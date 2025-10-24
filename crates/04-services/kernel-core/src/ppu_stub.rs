@@ -1,5 +1,3 @@
-#![allow(clippy::unnecessary_cast)]
-
 use crate::bus::{BusScalar, IoRegs};
 
 /// Total CPU cycles per frame on the DMG.
