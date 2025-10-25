@@ -23,3 +23,9 @@ web/roms/
 tests/wasm/pkg/
 
 node_modules/
+
+# Local ROM assets (user-supplied)
+third_party/bootroms/*
+!third_party/bootroms/README.md
+third_party/testroms/*
+!third_party/testroms/README.md

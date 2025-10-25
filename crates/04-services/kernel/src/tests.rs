@@ -1,12 +1,17 @@
 use super::{instance::AnyCore, KernelFarm, KernelService};
+use kernel_core::bus::IoRegs;
 use kernel_core::ppu_stub::CYCLES_PER_FRAME;
 use kernel_core::CoreConfig;
 use service_abi::{
     DebugCmd, DebugRep, KernelCmd, KernelRep, KernelServiceHandle, MemSpace, StepKind,
     SubmitOutcome, TickPurpose,
 };
+use std::env;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use transport::{SlotPool, SlotPoolConfig, SlotPoolHandle};
+use testdata::bytes as test_rom_bytes;
 
 fn collect_reports(reports: impl IntoIterator<Item = KernelRep>) -> Vec<KernelRep> {
     reports.into_iter().collect()
@@ -31,12 +36,6 @@ fn load_blank_rom(service: &KernelServiceHandle, group: u16) {
 fn drain_debug(service: &KernelServiceHandle, budget: usize) -> Vec<KernelRep> {
     collect_reports(service.drain(budget))
 }
-const DMG_LOGO: [u8; 48] = [
-    0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C, 0x00, 0x0D,
-    0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6, 0xDD, 0xDD, 0xD9, 0x99,
-    0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC, 0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E,
-];
-
 #[test]
 fn tick_produces_frame() {
     let service = KernelService::new_handle(8);
@@ -256,8 +255,49 @@ fn debug_step_frame_produces_frame_and_tick() {
     assert!(saw_tick_done, "expected TickDone alongside frame step");
 }
 
+fn optional_tetris_rom() -> Option<Arc<[u8]>> {
+    if let Ok(path) = env::var("GBX_TETRIS_ROM") {
+        match fs::read(&path) {
+            Ok(bytes) => {
+                if bytes.is_empty() {
+                    eprintln!("GBX_TETRIS_ROM at {:?} is empty; skipping test", path);
+                    return None;
+                }
+                return Some(Arc::from(bytes.into_boxed_slice()));
+            }
+            Err(err) => {
+                eprintln!(
+                    "failed to load tetris ROM from GBX_TETRIS_ROM={:?}: {}; skipping test",
+                    path, err
+                );
+                return None;
+            }
+        }
+    }
+
+    let default_path = Path::new("third_party/testroms/tetris.gb");
+    if !default_path.exists() {
+        eprintln!(
+            "tetris ROM not found at {:?}; skipping tetris-specific test",
+            default_path
+        );
+        return None;
+    }
+
+    match fs::read(default_path) {
+        Ok(bytes) => Some(Arc::from(bytes.into_boxed_slice())),
+        Err(err) => {
+            eprintln!(
+                "failed to read tetris ROM at {:?}: {}; skipping test",
+                default_path, err
+            );
+            None
+        }
+    }
+}
+
 #[test]
-fn boot_logo_populates_vram() {
+fn default_rom_matches_blargg_bundle() {
     let frame_pool = Arc::new(SlotPoolHandle::new(
         SlotPool::new(SlotPoolConfig {
             slot_count: 4,
@@ -267,39 +307,248 @@ fn boot_logo_populates_vram() {
     ));
 
     let mut farm = KernelFarm::new(frame_pool, CoreConfig::default());
-    let mut rom = vec![0u8; 0x8000];
-    rom[0x0104..0x0134].copy_from_slice(&DMG_LOGO);
-    let rom = Arc::<[u8]>::from(rom.into_boxed_slice());
-    farm.load_rom(0, Arc::clone(&rom));
-
     let inst = farm.ensure_instance(0);
-    let consumed = inst.step_cycles(70_224);
-    assert_eq!(consumed, 70_224);
-    let vram = match &inst.core {
-        AnyCore::Scalar(core) => &core.bus.vram,
-        _ => panic!("boot logo test expects scalar core"),
+    let expected = test_rom_bytes(super::DEFAULT_ROM_PATH);
+    let expected_ref: &[u8] = expected.as_ref();
+    let actual = match &inst.core {
+        AnyCore::Scalar(core) => core.bus.rom.as_ref(),
+        AnyCore::Simd2(core) => core.bus.lane(0).rom.as_ref(),
+        AnyCore::Simd4(core) => core.bus.lane(0).rom.as_ref(),
     };
 
-    let base = (0x8010 - 0x8000) as usize;
-    let sample = &vram[base..base + 16];
-    assert!(sample.iter().any(|&byte| byte != 0));
+    assert_eq!(
+        actual.len(),
+        expected_ref.len(),
+        "default ROM length differs"
+    );
+    assert_eq!(
+        actual, expected_ref,
+        "default ROM contents differ from expected bundle"
+    );
+}
 
-    let mut frame = vec![0u8; 160 * 144 * 4];
-    inst.render_into(&mut frame);
-    assert!(frame.iter().any(|&byte| byte != 0xFF));
-    if let Some(idx) = frame
-        .chunks_exact(4)
-        .position(|px| px != [0xFF, 0xFF, 0xFF, 0xFF])
-    {
-        let px = &frame[idx * 4..idx * 4 + 4];
-        eprintln!("first differing pixel index={} rgba={:?}", idx, px);
+#[test]
+fn tetris_rom_produces_multiple_frames() {
+    let frame_pool = Arc::new(SlotPoolHandle::new(
+        SlotPool::new(SlotPoolConfig {
+            slot_count: 8,
+        slot_size: 160 * 144 * 4,
+    })
+    .expect("slot pool"),
+    ));
+
+    let Some(rom) = optional_tetris_rom() else {
+        return;
+    };
+
+    let mut farm = KernelFarm::new(frame_pool, CoreConfig::default());
+    let _ = farm.load_rom(0, Arc::clone(&rom));
+
+    const MAX_TICKS: usize = 2048;
+    const TARGET_FRAMES_WITH_BOOT: usize = 120;
+    const TARGET_NON_WHITE_WITH_BOOT: usize = 60;
+
+    let boot_rom_present = {
+        let inst = farm.ensure_instance(0);
+        inst.boot_rom_enabled()
+    };
+    let target_frames = if boot_rom_present {
+        TARGET_FRAMES_WITH_BOOT
+    } else {
+        1
+    };
+    let target_non_white_frames = if boot_rom_present {
+        TARGET_NON_WHITE_WITH_BOOT
+    } else {
+        1
+    };
+
+    let mut total_frames = 0usize;
+    let mut lcd_on_ticks = 0usize;
+    let mut lcd_off_ticks = 0usize;
+    let mut non_white_frames = 0usize;
+    let mut ticks_run = 0usize;
+    let mut boot_rom_disabled = false;
+    let mut diff_frame_after_boot = false;
+    let mut boot_frame_pixels: Option<Vec<u8>> = None;
+    let mut last_overlay_enabled = farm.ensure_instance(0).boot_rom_enabled();
+
+    for _ in 0..MAX_TICKS {
+        let mut reports = Vec::new();
+        farm.tick(0, CYCLES_PER_FRAME, &mut reports);
+        let (overlay_enabled, lcdc) = {
+            let inst = farm.ensure_instance(0);
+            let lcdc = match &inst.core {
+                AnyCore::Scalar(core) => core.bus.io.read(IoRegs::LCDC),
+                AnyCore::Simd2(core) => core.bus.lane(0).io.read(IoRegs::LCDC),
+                AnyCore::Simd4(core) => core.bus.lane(0).io.read(IoRegs::LCDC),
+            };
+            (inst.boot_rom_enabled(), lcdc)
+        };
+
+        for rep in reports.into_iter() {
+            if let KernelRep::LaneFrame { span, .. } = rep {
+                total_frames += 1;
+                let pixels = span.pixels.as_ref();
+                if pixels
+                    .chunks_exact(4)
+                    .any(|px| px[0] != 0xFF || px[1] != 0xFF || px[2] != 0xFF)
+                {
+                    non_white_frames += 1;
+                }
+
+                if overlay_enabled {
+                    if boot_frame_pixels.is_none() {
+                        boot_frame_pixels = Some(pixels.to_vec());
+                    }
+                } else if total_frames > 360 {
+                    if let Some(boot_pixels) = boot_frame_pixels.as_ref() {
+                        if !diff_frame_after_boot
+                            && boot_pixels.len() == pixels.len()
+                            && boot_pixels.iter().zip(pixels.iter()).any(|(a, b)| a != b)
+                        {
+                            diff_frame_after_boot = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (lcdc & 0x80) != 0 {
+            lcd_on_ticks += 1;
+        } else {
+            lcd_off_ticks += 1;
+        }
+
+        ticks_run += 1;
+        if last_overlay_enabled && !overlay_enabled {
+            boot_rom_disabled = true;
+        }
+        last_overlay_enabled = overlay_enabled;
+        if total_frames >= target_frames && non_white_frames >= target_non_white_frames {
+            break;
+        }
     }
 
-    let (width, height) = inst.sink.dimensions();
-    let expected_len = usize::from(width) * usize::from(height) * 4;
-    let produced = inst
-        .produce_frame(expected_len)
-        .expect("frame production")
-        .0;
-    assert!(produced.iter().any(|&byte| byte != 0xFF));
+    assert!(
+        total_frames >= target_frames,
+        "expected Tetris ROM to produce at least {} frame(s), saw {} after {} ticks; lcd_on_ticks={} lcd_off_ticks={}",
+        target_frames,
+        total_frames,
+        ticks_run,
+        lcd_on_ticks,
+        lcd_off_ticks
+    );
+
+    assert!(
+        non_white_frames >= target_non_white_frames,
+        "expected at least {} non-white frame(s), saw {} after {} ticks",
+        target_non_white_frames,
+        non_white_frames,
+        ticks_run
+    );
+
+    if boot_rom_present {
+        assert!(boot_rom_disabled, "expected boot ROM to disable itself");
+        assert!(
+            diff_frame_after_boot,
+            "expected to observe a frame that differs from the boot logo after the boot ROM completes"
+        );
+    }
+}
+
+#[test]
+fn tetris_rom_advances_without_boot_rom() {
+    let _guard = EnvVarGuard::set("GBX_BOOT_ROM_DMG", "/nonexistent");
+
+    let frame_pool = Arc::new(SlotPoolHandle::new(
+        SlotPool::new(SlotPoolConfig {
+            slot_count: 8,
+            slot_size: 160 * 144 * 4,
+        })
+        .expect("slot pool"),
+    ));
+
+    let mut farm = KernelFarm::new(frame_pool, CoreConfig::default());
+    let rom =
+        Arc::<[u8]>::from(include_bytes!("../../../../third_party/testroms/tetris.gb").as_slice());
+    let _ = farm.load_rom(0, Arc::clone(&rom));
+
+    let mut total_frames = 0usize;
+    let mut ticks_run = 0usize;
+    let mut boot_rom_disabled = false;
+    let mut diff_frame_after_boot = false;
+    let mut boot_frame_pixels: Option<Vec<u8>> = None;
+    let mut last_boot_active = farm.ensure_instance(0).boot_active();
+
+    for _ in 0..4096 {
+        let mut reports = Vec::new();
+        farm.tick(0, CYCLES_PER_FRAME, &mut reports);
+
+        let inst = farm.ensure_instance(0);
+        let boot_enabled = inst.boot_active();
+
+        for rep in reports.into_iter() {
+            if let KernelRep::LaneFrame { span, .. } = rep {
+                total_frames += 1;
+                if boot_enabled {
+                    if boot_frame_pixels.is_none() {
+                        boot_frame_pixels = Some(span.pixels.as_ref().to_vec());
+                    }
+                } else if total_frames > 360 {
+                    if let Some(boot) = boot_frame_pixels.as_ref() {
+                        if boot.len() == span.pixels.len()
+                            && boot.iter().zip(span.pixels.iter()).any(|(a, b)| a != b)
+                        {
+                            diff_frame_after_boot = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if last_boot_active && !boot_enabled {
+            boot_rom_disabled = true;
+        }
+        last_boot_active = boot_enabled;
+
+        ticks_run += 1;
+        if diff_frame_after_boot && total_frames >= 180 {
+            break;
+        }
+    }
+
+    assert!(
+        boot_rom_disabled,
+        "boot sequence should complete (ticks_run={} total_frames={})",
+        ticks_run, total_frames
+    );
+    assert!(
+        diff_frame_after_boot,
+        "expected a frame different from the boot logo after {} ticks (produced {} frames)",
+        ticks_run, total_frames
+    );
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let prev = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, prev }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.prev.as_ref() {
+            std::env::set_var(self.key, prev);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
 }

@@ -28,6 +28,10 @@ pub struct BusScalar {
     pub rom: Arc<[u8]>,
     /// Currently selected switchable ROM bank (bank 0 fixed).
     pub rom_bank: usize,
+    /// Optional bootstrap ROM overlay.
+    boot_rom: Option<Arc<[u8]>>,
+    /// Tracks whether the bootstrap overlay is active.
+    boot_rom_enabled: bool,
     /// Video RAM region used by the PPU.
     pub vram: Box<[u8; 0x2000]>,
     /// Work RAM shared by the CPU.
@@ -74,10 +78,13 @@ pub struct BusScalar {
 
 impl BusScalar {
     /// Creates a bus using the supplied ROM bytes.
-    pub fn new(rom: Arc<[u8]>) -> Self {
+    pub fn new(rom: Arc<[u8]>, boot_rom: Option<Arc<[u8]>>) -> Self {
+        let boot_rom_enabled = boot_rom.is_some();
         let mut bus = Self {
             rom,
             rom_bank: 1,
+            boot_rom,
+            boot_rom_enabled,
             vram: Box::new([0; 0x2000]),
             wram: Box::new([0; 0x2000]),
             oam: Box::new([0; 0xA0]),
@@ -107,6 +114,7 @@ impl BusScalar {
     /// Replaces the ROM contents.
     pub fn load_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = rom;
+        self.boot_rom_enabled = self.boot_rom.is_some();
         self.serial_out.clear();
         self.reset_serial_state();
         self.joyp_select = 0x30;
@@ -117,6 +125,49 @@ impl BusScalar {
         self.timer_tma_write = None;
         self.timer_tac_write = None;
         self.set_rom_bank(1);
+    }
+
+    /// Resets VRAM, WRAM, and IO state to their power-on defaults.
+    pub fn reset_memory(&mut self) {
+        self.vram.fill(0);
+        self.wram.fill(0);
+        self.oam.fill(0);
+        self.hram = [0; 0x7F];
+        self.io = IoRegs::new();
+        self.ie = 0;
+        self.serial_out.clear();
+        self.reset_serial_state();
+        self.serial_pending_data = 0;
+        self.serial_counter = 0;
+        self.serial_bits_remaining = 0;
+        self.serial_internal_clock = true;
+        self.lockstep_ly_override = None;
+        self.joyp_select = 0x30;
+        self.joyp_buttons = 0x0F;
+        self.joyp_dpad = 0x0F;
+        self.timer_div_reset = false;
+        self.timer_tima_write = None;
+        self.timer_tma_write = None;
+        self.timer_tac_write = None;
+        self.boot_rom_enabled = self.boot_rom.is_some();
+        self.set_rom_bank(1);
+    }
+
+    /// Enables or disables the bootstrap overlay.
+    pub fn set_boot_rom_enabled(&mut self, enabled: bool) {
+        if self.boot_rom.is_some() {
+            self.boot_rom_enabled = enabled;
+        }
+    }
+
+    /// Returns whether a bootstrap overlay is present.
+    pub fn has_boot_rom(&self) -> bool {
+        self.boot_rom.is_some()
+    }
+
+    /// Returns whether the bootstrap overlay is currently active.
+    pub fn boot_rom_enabled(&self) -> bool {
+        self.boot_rom_enabled
     }
 
     /// Returns the accumulated serial log as a string and clears the buffer.
@@ -154,6 +205,19 @@ impl BusScalar {
             bank = 1;
         }
         self.rom_bank = bank;
+    }
+
+    pub(crate) fn boot_rom_byte(&self, addr: u16) -> Option<u8> {
+        if !self.boot_rom_enabled {
+            return None;
+        }
+        self.boot_rom
+            .as_ref()
+            .and_then(|boot| boot.get(addr as usize).copied())
+    }
+
+    pub(crate) fn disable_boot_rom(&mut self) {
+        self.boot_rom_enabled = false;
     }
 
     const SERIAL_CYCLES_PER_BIT: u32 = 512;
@@ -484,7 +548,7 @@ mod tests {
 
     fn make_bus() -> BusScalar {
         let rom = Arc::<[u8]>::from(vec![0u8; 0x8000]);
-        BusScalar::new(rom)
+        BusScalar::new(rom, None)
     }
 
     #[test]

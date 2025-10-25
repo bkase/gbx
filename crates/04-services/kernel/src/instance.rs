@@ -57,6 +57,39 @@ impl AnyCore {
             AnyCore::Simd4(core) => core.reset_post_boot(model),
         }
     }
+
+    pub fn reset_power_on(&mut self, model: Model) {
+        match self {
+            AnyCore::Scalar(core) => core.reset_power_on(model),
+            AnyCore::Simd2(core) => core.reset_power_on(model),
+            AnyCore::Simd4(core) => core.reset_power_on(model),
+        }
+    }
+
+    pub fn has_boot_rom(&self) -> bool {
+        match self {
+            AnyCore::Scalar(core) => core.has_boot_rom(),
+            AnyCore::Simd2(core) => core.has_boot_rom(),
+            AnyCore::Simd4(core) => core.has_boot_rom(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn boot_rom_enabled(&self) -> bool {
+        match self {
+            AnyCore::Scalar(core) => core.boot_rom_enabled(),
+            AnyCore::Simd2(core) => core.boot_rom_enabled(),
+            AnyCore::Simd4(core) => core.boot_rom_enabled(),
+        }
+    }
+
+    pub fn set_boot_rom_enabled(&mut self, enabled: bool) {
+        match self {
+            AnyCore::Scalar(core) => core.set_boot_rom_enabled(enabled),
+            AnyCore::Simd2(core) => core.set_boot_rom_enabled(enabled),
+            AnyCore::Simd4(core) => core.set_boot_rom_enabled(enabled),
+        }
+    }
 }
 
 fn inspector_from_simd<const LANES: usize>(
@@ -173,10 +206,9 @@ impl Instance {
 
     pub fn step_cycles(&mut self, budget: u32) -> u32 {
         if let Some(boot) = self.boot.as_mut() {
-            boot.step(budget)
-        } else {
-            self.core.step_cycles(budget)
+            return boot.step(budget);
         }
+        self.core.step_cycles(budget)
     }
 
     pub fn step_instructions(&mut self, count: u32) -> (u32, u16) {
@@ -186,7 +218,7 @@ impl Instance {
             return (0, last_pc);
         }
         if self.boot.is_some() {
-            return (0, last_pc);
+            self.boot = None;
         }
         for _ in 0..count {
             let (cycles, pc) = self.core.step_instruction();
@@ -209,18 +241,24 @@ impl Instance {
     }
 
     pub fn load_rom(&mut self, rom: Arc<[u8]>) {
-        let rom_copy = Arc::clone(&rom);
-        self.core.load_rom(rom);
-        self.core.reset_post_boot(Model::Dmg);
-        let blank_rom = rom_copy.iter().all(|&byte| byte == 0);
-        self.boot = if blank_rom {
-            None
+        let blank_rom = rom.iter().all(|&byte| byte == 0);
+        self.core.load_rom(Arc::clone(&rom));
+        let using_boot_rom = self.core.has_boot_rom();
+        if using_boot_rom && !blank_rom {
+            self.core.reset_power_on(Model::Dmg);
+            self.core.set_boot_rom_enabled(true);
+            self.boot = None;
         } else {
-            match &mut self.core {
-                AnyCore::Scalar(core) => Some(BootSequence::new(core.as_mut(), rom_copy.as_ref())),
-                AnyCore::Simd2(_) | AnyCore::Simd4(_) => None,
-            }
-        };
+            self.core.reset_post_boot(Model::Dmg);
+            self.boot = if blank_rom {
+                None
+            } else {
+                match &mut self.core {
+                    AnyCore::Scalar(core) => Some(BootSequence::new(core.as_mut(), rom.as_ref())),
+                    AnyCore::Simd2(_) | AnyCore::Simd4(_) => None,
+                }
+            };
+        }
         self.next_frame_id = 0;
     }
 
@@ -333,6 +371,15 @@ impl Instance {
             // exist while we render the frame into `buf`.
             unsafe { (&mut *this).render_into(buf) }
         })
+    }
+
+    pub fn boot_active(&self) -> bool {
+        self.boot.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn boot_rom_enabled(&self) -> bool {
+        self.core.boot_rom_enabled()
     }
 }
 
@@ -594,7 +641,6 @@ fn vram_index_checked(addr: u16, len: usize) -> Option<usize> {
         None
     }
 }
-
 fn window_slice(data: &[u8], region_base: u16, base: u16, len: u16) -> Vec<u8> {
     if len == 0 {
         return Vec::new();

@@ -21,14 +21,14 @@ fn backend_core_config_simd(lanes: usize) -> CoreConfig {
 }
 
 fn backend_new_bus_scalar(rom: Arc<[u8]>) -> BusScalar {
-    BusScalar::new(rom)
+    BusScalar::new(rom, None)
 }
 
 fn backend_new_bus_simd<const LANES: usize>(rom: Arc<[u8]>) -> BusSimd<LANES>
 where
     LaneCount<LANES>: SupportedLaneCount,
 {
-    BusSimd::new(rom)
+    BusSimd::new(rom, None)
 }
 
 fn backend_take_serial_scalar(core: &mut Core<Scalar, BusScalar>) -> SerialLog {

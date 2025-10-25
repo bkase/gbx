@@ -112,6 +112,7 @@ impl<E: Exec, B: CoreBus<E>> Core<E, B> {
                 self.bus.write8(E::from_u16(0xFF43), E::from_u8(0x00)); // SCX
                 self.bus.write8(E::from_u16(0xFF44), E::from_u8(0x00)); // LY
                 self.bus.write8(E::from_u16(0xFF47), E::from_u8(0xFC)); // BGP
+                self.bus.write8(E::from_u16(0xFF50), E::from_u8(0x01)); // disable boot ROM overlay
                 self.timers.initialize_post_boot(&mut self.bus);
             }
         }
@@ -523,7 +524,7 @@ impl<E: Exec, B: CoreBus<E>> Core<E, B> {
 impl Core<Scalar, BusScalar> {
     /// Convenience constructor using the scalar bus.
     pub fn from_rom(rom: Arc<[u8]>) -> Self {
-        let bus = BusScalar::new(rom);
+        let bus = BusScalar::new(rom, None);
         Self::new(bus, CoreConfig::default(), Model::Dmg)
     }
 
@@ -531,6 +532,53 @@ impl Core<Scalar, BusScalar> {
     pub fn load_rom(&mut self, rom: Arc<[u8]>) {
         self.bus.load_rom(rom);
         self.cpu.pc = <Scalar as Exec>::from_u16(0x0100);
+    }
+
+    /// Returns whether a bootstrap ROM is available.
+    pub fn has_boot_rom(&self) -> bool {
+        self.bus.has_boot_rom()
+    }
+
+    /// Returns whether the bootstrap overlay is currently enabled.
+    pub fn boot_rom_enabled(&self) -> bool {
+        self.bus.boot_rom_enabled()
+    }
+
+    /// Enables or disables the bootstrap overlay.
+    pub fn set_boot_rom_enabled(&mut self, enabled: bool) {
+        self.bus.set_boot_rom_enabled(enabled);
+    }
+
+    /// Restores hardware to the power-on state so the bootstrap ROM can execute.
+    pub fn reset_power_on(&mut self, model: Model) {
+        self.model = model;
+        self.cpu = Cpu::new();
+        self.timers.reset();
+        self.ppu.reset();
+        self.cycles_this_frame = 0;
+        self.ppu_enabled = true;
+        self.cpu.halted = false;
+        self.cpu.enable_ime_pending = false;
+        self.bus.reset_memory();
+        self.bus.set_boot_rom_enabled(self.bus.has_boot_rom());
+        self.cpu.a = <Scalar as Exec>::from_u8(0x00);
+        self.cpu.f.from_byte(0x00);
+        self.cpu.b = <Scalar as Exec>::from_u8(0x00);
+        self.cpu.c = <Scalar as Exec>::from_u8(0x00);
+        self.cpu.d = <Scalar as Exec>::from_u8(0x00);
+        self.cpu.e = <Scalar as Exec>::from_u8(0x00);
+        self.cpu.h = <Scalar as Exec>::from_u8(0x00);
+        self.cpu.l = <Scalar as Exec>::from_u8(0x00);
+        self.cpu.sp = <Scalar as Exec>::from_u16(0x0000);
+        self.cpu.pc = <Scalar as Exec>::from_u16(0x0000);
+        self.cpu.ime = false;
+        self.cpu.halted = false;
+        self.cpu.enable_ime_pending = false;
+    }
+
+    /// Returns a clone of the currently loaded cartridge ROM.
+    pub fn snapshot_rom(&self) -> Arc<[u8]> {
+        Arc::clone(&self.bus.rom)
     }
 }
 
@@ -544,7 +592,7 @@ where
             lanes: NonZeroUsize::new(LANES).expect("SIMD lanes must be non-zero"),
             ..CoreConfig::default()
         };
-        let bus = BusSimd::new(rom);
+        let bus = BusSimd::new(rom, None);
         Self::new(bus, config, Model::Dmg)
     }
 
@@ -552,5 +600,52 @@ where
     pub fn load_rom(&mut self, rom: Arc<[u8]>) {
         self.bus.load_rom(rom);
         self.cpu.pc = <SimdExec<LANES> as Exec>::from_u16(0x0100);
+    }
+
+    /// Returns whether a bootstrap ROM is available.
+    pub fn has_boot_rom(&self) -> bool {
+        self.bus.has_boot_rom()
+    }
+
+    /// Returns whether the bootstrap overlay is currently enabled.
+    pub fn boot_rom_enabled(&self) -> bool {
+        self.bus.boot_rom_enabled()
+    }
+
+    /// Enables or disables the bootstrap overlay across all lanes.
+    pub fn set_boot_rom_enabled(&mut self, enabled: bool) {
+        self.bus.set_boot_rom_enabled(enabled);
+    }
+
+    /// Restores hardware to the power-on state so the bootstrap ROM can execute.
+    pub fn reset_power_on(&mut self, model: Model) {
+        self.model = model;
+        self.cpu = Cpu::new();
+        self.timers.reset();
+        self.ppu.reset();
+        self.cycles_this_frame = 0;
+        self.ppu_enabled = true;
+        self.cpu.halted = false;
+        self.cpu.enable_ime_pending = false;
+        self.bus.reset_memory();
+        self.bus.set_boot_rom_enabled(self.bus.has_boot_rom());
+        self.cpu.a = SimdExec::<LANES>::from_u8(0x00);
+        self.cpu.f.from_byte(0x00);
+        self.cpu.b = SimdExec::<LANES>::from_u8(0x00);
+        self.cpu.c = SimdExec::<LANES>::from_u8(0x00);
+        self.cpu.d = SimdExec::<LANES>::from_u8(0x00);
+        self.cpu.e = SimdExec::<LANES>::from_u8(0x00);
+        self.cpu.h = SimdExec::<LANES>::from_u8(0x00);
+        self.cpu.l = SimdExec::<LANES>::from_u8(0x00);
+        self.cpu.sp = SimdExec::<LANES>::from_u16(0x0000);
+        self.cpu.pc = SimdExec::<LANES>::from_u16(0x0000);
+        self.cpu.ime = false;
+        self.cpu.halted = false;
+        self.cpu.enable_ime_pending = false;
+    }
+
+    /// Returns a clone of the currently loaded cartridge ROM.
+    pub fn snapshot_rom(&self) -> Arc<[u8]> {
+        Arc::clone(&self.bus.lane(0).rom)
     }
 }

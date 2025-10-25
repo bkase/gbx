@@ -5,7 +5,13 @@ use crate::exec::{Exec, Scalar};
 pub fn read8_scalar(bus: &mut BusScalar, addr: <Scalar as Exec>::U16) -> <Scalar as Exec>::U8 {
     let addr = <Scalar as Exec>::to_u16(addr);
     match addr {
-        0x0000..=0x3FFF => bus.rom.get(addr as usize).copied().unwrap_or(0xFF),
+        0x0000..=0x3FFF => {
+            if let Some(byte) = bus.boot_rom_byte(addr) {
+                byte
+            } else {
+                bus.rom.get(addr as usize).copied().unwrap_or(0xFF)
+            }
+        }
         0x4000..=0x7FFF => {
             let bank = bus.rom_bank;
             let offset = (addr - 0x4000) as usize;
@@ -34,6 +40,13 @@ pub fn read8_scalar(bus: &mut BusScalar, addr: <Scalar as Exec>::U16) -> <Scalar
                 }
                 IoRegs::IF => bus.io.if_reg(),
                 IoRegs::LY => bus.lockstep_ly_override.unwrap_or_else(|| bus.io.read(idx)),
+                0x50 => {
+                    if bus.boot_rom_enabled() {
+                        0x00
+                    } else {
+                        0x01
+                    }
+                }
                 _ => bus.io.read(idx),
             }
         }
@@ -88,6 +101,12 @@ pub fn write8_scalar(
                     let src = Scalar::from_u16(base.wrapping_add(offset as u16));
                     let byte = read8_scalar(bus, src);
                     bus.oam[offset as usize] = Scalar::to_u8(byte);
+                }
+                return;
+            }
+            if idx == 0x50 {
+                if value & 0x01 != 0 {
+                    bus.disable_boot_rom();
                 }
                 return;
             }

@@ -9,3 +9,4 @@ kernel-core = { path = "../kernel-core" }
 services-common = { path = "../../03-driver/services-common" }
 smallvec = { workspace = true }
 transport = { path = "../../01-transport/transport" }
+testdata = { path = "../../testdata" }

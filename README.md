@@ -27,6 +27,11 @@ Ultra-high-performance, Elm-inspired Game Boy emulator built around SIMD kernels
  devenv tasks run build:wasm        # WASM artifact
  ```
 
+## ROM Assets
+
+- **DMG boot ROM**: Place your legally obtained `dmg.bin` under `third_party/bootroms/` or set `GBX_BOOT_ROM_DMG=/absolute/path/to/dmg.bin`. If absent, the emulator skips the boot ROM and still passes the test suite.
+- **Default cartridge**: By default the kernel boots against Blargg’s `cpu_instrs/individual/03-op sp,hl.gb` ROM from the vendored test bundle. Override it with `GBX_DEFAULT_ROM=/path/to/cart.gb` if you want a different startup cartridge. The workspace does not ship commercial ROMs like `tetris.gb`; fetch or supply your own and optionally point tests at it with `GBX_TETRIS_ROM=/path/to/tetris.gb`.
+
 ## Web Dev Server
 
 - `devenv tasks run web:serve` — runs the Rust dev server that injects COOP/COEP headers so browsers enable SharedArrayBuffer/WebGPU.

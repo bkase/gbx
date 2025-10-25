@@ -1405,6 +1405,7 @@ dependencies = [
  "service-abi",
  "services-common",
  "smallvec",
+ "testdata",
  "transport",
 ]
 

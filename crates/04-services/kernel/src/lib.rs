@@ -17,8 +17,87 @@ use services_common::{drain_queue, try_submit_queue, LocalQueue};
 use smallvec::{smallvec, SmallVec};
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::env;
+use std::fs;
+use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
+use testdata::bytes as test_rom_bytes;
 use transport::{SlotPool, SlotPoolConfig, SlotPoolHandle};
+
+const DEFAULT_ROM_PATH: &str = "blargg/cpu_instrs/individual/03-op sp,hl.gb";
+
+fn load_dmg_boot_rom() -> Option<Arc<[u8]>> {
+    static BOOT_ROM: OnceLock<Option<Arc<[u8]>>> = OnceLock::new();
+    BOOT_ROM
+        .get_or_init(|| {
+            let path = env::var("GBX_BOOT_ROM_DMG")
+                .ok()
+                .map(PathBuf::from)
+                .or_else(|| {
+                    let default = Path::new("third_party/bootroms/dmg.bin");
+                    if default.exists() {
+                        Some(default.to_path_buf())
+                    } else {
+                        None
+                    }
+                });
+
+            let Some(path) = path else {
+                return None;
+            };
+
+            match fs::read(&path) {
+                Ok(bytes) => {
+                    if bytes.len() != 0x100 {
+                        eprintln!(
+                            "warning: DMG boot ROM {:?} has unexpected length {} (expected 256 bytes)",
+                            path,
+                            bytes.len()
+                        );
+                        None
+                    } else {
+                        Some(Arc::<[u8]>::from(bytes.into_boxed_slice()))
+                    }
+                }
+                Err(err) => {
+                    eprintln!("warning: failed to load DMG boot ROM {:?}: {}", path, err);
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
+fn load_default_rom() -> Arc<[u8]> {
+    if let Ok(path) = env::var("GBX_DEFAULT_ROM") {
+        match fs::read(&path) {
+            Ok(bytes) => {
+                if bytes.is_empty() {
+                    eprintln!(
+                        "warning: default ROM at {:?} is empty; falling back to {}",
+                        path, DEFAULT_ROM_PATH
+                    );
+                } else {
+                    return Arc::from(bytes.into_boxed_slice());
+                }
+            }
+            Err(err) => eprintln!(
+                "warning: failed to read default ROM from {:?}: {}; falling back to {}",
+                path, err, DEFAULT_ROM_PATH
+            ),
+        }
+    }
+    match panic::catch_unwind(AssertUnwindSafe(|| test_rom_bytes(DEFAULT_ROM_PATH))) {
+        Ok(rom) => rom,
+        Err(_) => {
+            eprintln!(
+                "warning: failed to load {DEFAULT_ROM_PATH} from testdata; using blank ROM fallback"
+            );
+            Arc::from(vec![0u8; 0x8000].into_boxed_slice())
+        }
+    }
+}
 
 struct SingleThreadCell<T> {
     value: UnsafeCell<T>,
@@ -50,17 +129,20 @@ pub struct KernelFarm {
     instances: HashMap<u16, Instance>,
     frame_pool: Arc<SlotPoolHandle>,
     core_config: CoreConfig,
-    blank_rom: Arc<[u8]>,
+    default_rom: Arc<[u8]>,
+    boot_rom: Option<Arc<[u8]>>,
 }
 
 impl KernelFarm {
     pub fn new(frame_pool: Arc<SlotPoolHandle>, core_config: CoreConfig) -> Self {
-        let blank_rom = Arc::<[u8]>::from(vec![0u8; 0x8000].into_boxed_slice());
+        let default_rom = load_default_rom();
+        let boot_rom = load_dmg_boot_rom();
         Self {
             instances: HashMap::new(),
             frame_pool,
             core_config,
-            blank_rom,
+            default_rom,
+            boot_rom,
         }
     }
 
@@ -75,29 +157,41 @@ impl KernelFarm {
             let instance = match lanes {
                 1 => {
                     let mut core = Core::new(
-                        BusScalar::new(Arc::clone(&self.blank_rom)),
+                        BusScalar::new(Arc::clone(&self.default_rom), self.boot_rom.clone()),
                         self.core_config,
                         Model::Dmg,
                     );
-                    core.reset_post_boot(Model::Dmg);
+                    if self.boot_rom.is_some() {
+                        core.reset_power_on(Model::Dmg);
+                    } else {
+                        core.reset_post_boot(Model::Dmg);
+                    }
                     Instance::new_scalar(core, sink)
                 }
                 2 => {
                     let mut core = SimdCore::<2>::new(
-                        BusSimd::new(Arc::clone(&self.blank_rom)),
+                        BusSimd::new(Arc::clone(&self.default_rom), self.boot_rom.clone()),
                         self.core_config,
                         Model::Dmg,
                     );
-                    core.reset_post_boot(Model::Dmg);
+                    if self.boot_rom.is_some() {
+                        core.reset_power_on(Model::Dmg);
+                    } else {
+                        core.reset_post_boot(Model::Dmg);
+                    }
                     Instance::new_simd2(core, sink)
                 }
                 4 => {
                     let mut core = SimdCore::<4>::new(
-                        BusSimd::new(Arc::clone(&self.blank_rom)),
+                        BusSimd::new(Arc::clone(&self.default_rom), self.boot_rom.clone()),
                         self.core_config,
                         Model::Dmg,
                     );
-                    core.reset_post_boot(Model::Dmg);
+                    if self.boot_rom.is_some() {
+                        core.reset_power_on(Model::Dmg);
+                    } else {
+                        core.reset_post_boot(Model::Dmg);
+                    }
                     Instance::new_simd4(core, sink)
                 }
                 _ => panic!("unsupported SIMD lane count {}", lanes),
@@ -109,21 +203,24 @@ impl KernelFarm {
 
     pub fn tick(&mut self, id: u16, budget: u32, out: &mut Vec<KernelRep>) -> u32 {
         let inst = self.ensure_instance(id);
-        let cycles = inst.step_cycles(budget);
-        let mut publish_frame = |inst: &mut Instance| -> bool {
-            let (mut width, mut height) = inst.sink.dimensions();
-            if width == 0 {
-                width = 160;
-            }
-            if height == 0 {
-                height = 144;
-            }
-            if width == 0 || height == 0 {
-                panic!("transport frame dimensions must be non-zero");
-            }
-            let expected_len = usize::from(width)
-                .saturating_mul(usize::from(height))
-                .saturating_mul(4);
+        let mut cycles = inst.step_cycles(budget);
+        let (mut width, mut height) = inst.sink.dimensions();
+        if width == 0 {
+            width = 160;
+        }
+        if height == 0 {
+            height = 144;
+        }
+        if width == 0 || height == 0 {
+            panic!("transport frame dimensions must be non-zero");
+        }
+
+        let expected_len = usize::from(width)
+            .saturating_mul(usize::from(height))
+            .saturating_mul(4);
+
+        let mut published = false;
+        if inst.frame_ready() {
             if let Some((pixels, slot_span)) = inst.produce_frame(expected_len) {
                 let frame_id = inst.bump_frame_id();
                 out.push(KernelRep::LaneFrame {
@@ -137,19 +234,53 @@ impl KernelFarm {
                     },
                     frame_id,
                 });
-                true
-            } else {
-                false
+                published = true;
             }
-        };
-
-        let mut published = false;
-        if inst.frame_ready() {
-            published = publish_frame(inst);
         }
 
-        if !published {
-            publish_frame(inst);
+        if !published && inst.boot_active() {
+            if let Some((pixels, slot_span)) = inst.produce_frame(expected_len) {
+                let frame_id = inst.bump_frame_id();
+                out.push(KernelRep::LaneFrame {
+                    group: id,
+                    lane: 0,
+                    span: FrameSpan {
+                        width,
+                        height,
+                        pixels,
+                        slot_span,
+                    },
+                    frame_id,
+                });
+            }
+        }
+        if !published && !inst.boot_active() {
+            let mut attempt = 0;
+            while attempt < 4 && !inst.boot_active() {
+                let extra = inst.step_cycles(CYCLES_PER_FRAME);
+                if extra == 0 {
+                    break;
+                }
+                cycles = cycles.wrapping_add(extra);
+                if inst.frame_ready() {
+                    if let Some((pixels, slot_span)) = inst.produce_frame(expected_len) {
+                        let frame_id = inst.bump_frame_id();
+                        out.push(KernelRep::LaneFrame {
+                            group: id,
+                            lane: 0,
+                            span: FrameSpan {
+                                width,
+                                height,
+                                pixels,
+                                slot_span,
+                            },
+                            frame_id,
+                        });
+                        break;
+                    }
+                }
+                attempt += 1;
+            }
         }
         out.push(KernelRep::TickDone {
             group: id,

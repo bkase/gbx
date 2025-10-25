@@ -689,7 +689,7 @@ fn lcd_off_freezes_state() {
 
 #[test]
 fn ly_write_resets_register() {
-    let mut bus = BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice()));
+    let mut bus = BusScalar::new(Arc::from(vec![0x00u8; 0x8000].into_boxed_slice()), None);
     bus.io.write(IoRegs::LY, 42);
     mmu::write8_scalar(&mut bus, Scalar::from_u16(0xFF44), Scalar::from_u8(0x55));
     assert_eq!(

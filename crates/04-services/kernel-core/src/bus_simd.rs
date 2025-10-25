@@ -23,10 +23,10 @@ where
     LaneCount<LANES>: SupportedLaneCount,
 {
     /// Creates a SIMD bus by cloning the provided ROM into each lane.
-    pub fn new(rom: Arc<[u8]>) -> Self {
+    pub fn new(rom: Arc<[u8]>, boot_rom: Option<Arc<[u8]>>) -> Self {
         assert!(LANES > 0, "SIMD bus requires at least one lane");
         Self {
-            lanes: array::from_fn(|_| BusScalar::new(Arc::clone(&rom))),
+            lanes: array::from_fn(|_| BusScalar::new(Arc::clone(&rom), boot_rom.clone())),
         }
     }
 
@@ -41,6 +41,38 @@ where
         for lane in &mut self.lanes {
             lane.load_rom(Arc::clone(&rom));
         }
+    }
+
+    /// Returns whether a bootstrap ROM is present.
+    pub fn has_boot_rom(&self) -> bool {
+        self.lanes.iter().any(|lane| lane.has_boot_rom())
+    }
+
+    /// Returns whether the bootstrap overlay is currently enabled.
+    pub fn boot_rom_enabled(&self) -> bool {
+        self.lanes
+            .first()
+            .map(|lane| lane.boot_rom_enabled())
+            .unwrap_or(false)
+    }
+
+    /// Enables or disables the bootstrap overlay for all lanes.
+    pub fn set_boot_rom_enabled(&mut self, enabled: bool) {
+        for lane in &mut self.lanes {
+            lane.set_boot_rom_enabled(enabled);
+        }
+    }
+
+    /// Resets memory state for every lane.
+    pub fn reset_memory(&mut self) {
+        for lane in &mut self.lanes {
+            lane.reset_memory();
+        }
+    }
+
+    /// Returns a clone of the cartridge ROM for diagnostics.
+    pub fn snapshot_rom(&self) -> Arc<[u8]> {
+        Arc::clone(&self.lanes[0].rom)
     }
 
     /// Provides immutable access to a specific lane for diagnostics and tests.
