@@ -3,15 +3,54 @@ use kernel_core::bus::IoRegs;
 use kernel_core::ppu_stub::CYCLES_PER_FRAME;
 use kernel_core::CoreConfig;
 use service_abi::{
-    DebugCmd, DebugRep, KernelCmd, KernelRep, KernelServiceHandle, MemSpace, StepKind,
+    DebugCmd, DebugRep, FrameSpan, KernelCmd, KernelRep, KernelServiceHandle, MemSpace, StepKind,
     SubmitOutcome, TickPurpose,
 };
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use transport::{SlotPool, SlotPoolConfig, SlotPoolHandle};
 use testdata::bytes as test_rom_bytes;
+use transport::{SlotPool, SlotPoolConfig, SlotPoolHandle, SlotPop};
+
+const DMG_FRAME_BYTES: usize = 160 * 144 * 4;
+
+fn take_frame_pixels(pool: &Arc<SlotPoolHandle>, span: &FrameSpan, expected_len: usize) -> Vec<u8> {
+    if !span.pixels.is_empty() {
+        return span.pixels.as_ref().to_vec();
+    }
+
+    let Some(slot_span) = span.slot_span.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut pixels = vec![0u8; expected_len];
+    let mut written = 0usize;
+
+    pool.with_mut(|p| {
+        let mut consumed = Vec::with_capacity(slot_span.count as usize);
+        for _ in 0..slot_span.count {
+            match p.pop_ready() {
+                SlotPop::Ok { slot_idx } => {
+                    let slot = p.slot_mut(slot_idx);
+                    let take = expected_len.saturating_sub(written).min(slot.len());
+                    let end = written + take;
+                    pixels[written..end].copy_from_slice(&slot[..take]);
+                    written = end;
+                    consumed.push(slot_idx);
+                }
+                SlotPop::Empty => panic!("expected ready slot for frame span"),
+            }
+        }
+
+        for idx in consumed {
+            p.release_free(idx);
+        }
+    });
+
+    pixels.truncate(written);
+    pixels
+}
 
 fn collect_reports(reports: impl IntoIterator<Item = KernelRep>) -> Vec<KernelRep> {
     reports.into_iter().collect()
@@ -66,11 +105,71 @@ fn tick_produces_frame() {
 }
 
 #[test]
+fn frame_reports_slot_span_when_ready() {
+    let slot_size = DMG_FRAME_BYTES;
+    let pool = Arc::new(SlotPoolHandle::new(
+        SlotPool::new(SlotPoolConfig {
+            slot_count: 2,
+            slot_size,
+        })
+        .expect("slot pool"),
+    ));
+
+    let service = KernelService::with_frame_pool(8, Arc::clone(&pool), CoreConfig::default());
+    let rom = Arc::<[u8]>::from(vec![0x00u8; 0x8000].into_boxed_slice());
+
+    let load_cmd = KernelCmd::LoadRom {
+        group: 7,
+        bytes: Arc::clone(&rom),
+    };
+    assert_eq!(service.try_submit(&load_cmd), SubmitOutcome::Accepted);
+    collect_reports(service.drain(4));
+
+    let tick_cmd = KernelCmd::Tick {
+        group: 7,
+        purpose: TickPurpose::Display,
+        budget: CYCLES_PER_FRAME,
+    };
+    assert_eq!(service.try_submit(&tick_cmd), SubmitOutcome::Accepted);
+
+    let reports = collect_reports(service.drain(8));
+    let span = reports
+        .into_iter()
+        .find_map(|rep| match rep {
+            KernelRep::LaneFrame { span, .. } => Some(span),
+            _ => None,
+        })
+        .expect("expected lane frame");
+
+    assert!(
+        span.pixels.is_empty(),
+        "zero-copy span should embed no pixels"
+    );
+    let slot_span = span
+        .slot_span
+        .as_ref()
+        .expect("zero-copy frame should carry slot span");
+    assert_eq!(slot_span.count, 1, "frame should occupy a single slot");
+
+    let popped = pool.with_mut(|p| match p.pop_ready() {
+        SlotPop::Ok { slot_idx } => {
+            p.release_free(slot_idx);
+            slot_idx
+        }
+        SlotPop::Empty => panic!("expected ready slot"),
+    });
+    assert_eq!(
+        popped, slot_span.start_idx,
+        "slot span start should match ready slot"
+    );
+}
+
+#[test]
 fn backpressure_prevents_frame_without_slot() {
     let pool = Arc::new(SlotPoolHandle::new(
         SlotPool::new(SlotPoolConfig {
             slot_count: 1,
-            slot_size: 160 * 144 * 4,
+            slot_size: DMG_FRAME_BYTES,
         })
         .expect("slot pool"),
     ));
@@ -332,9 +431,9 @@ fn tetris_rom_produces_multiple_frames() {
     let frame_pool = Arc::new(SlotPoolHandle::new(
         SlotPool::new(SlotPoolConfig {
             slot_count: 8,
-        slot_size: 160 * 144 * 4,
-    })
-    .expect("slot pool"),
+            slot_size: 160 * 144 * 4,
+        })
+        .expect("slot pool"),
     ));
 
     let Some(rom) = optional_tetris_rom() else {
@@ -464,12 +563,12 @@ fn tetris_rom_advances_without_boot_rom() {
     let frame_pool = Arc::new(SlotPoolHandle::new(
         SlotPool::new(SlotPoolConfig {
             slot_count: 8,
-            slot_size: 160 * 144 * 4,
+            slot_size: DMG_FRAME_BYTES,
         })
         .expect("slot pool"),
     ));
 
-    let mut farm = KernelFarm::new(frame_pool, CoreConfig::default());
+    let mut farm = KernelFarm::new(Arc::clone(&frame_pool), CoreConfig::default());
     let rom =
         Arc::<[u8]>::from(include_bytes!("../../../../third_party/testroms/tetris.gb").as_slice());
     let _ = farm.load_rom(0, Arc::clone(&rom));
@@ -491,14 +590,15 @@ fn tetris_rom_advances_without_boot_rom() {
         for rep in reports.into_iter() {
             if let KernelRep::LaneFrame { span, .. } = rep {
                 total_frames += 1;
+                let pixels = take_frame_pixels(&frame_pool, &span, DMG_FRAME_BYTES);
                 if boot_enabled {
                     if boot_frame_pixels.is_none() {
-                        boot_frame_pixels = Some(span.pixels.as_ref().to_vec());
+                        boot_frame_pixels = Some(pixels.clone());
                     }
                 } else if total_frames > 360 {
                     if let Some(boot) = boot_frame_pixels.as_ref() {
-                        if boot.len() == span.pixels.len()
-                            && boot.iter().zip(span.pixels.iter()).any(|(a, b)| a != b)
+                        if boot.len() == pixels.len()
+                            && boot.iter().zip(pixels.iter()).any(|(a, b)| a != b)
                         {
                             diff_frame_after_boot = true;
                         }

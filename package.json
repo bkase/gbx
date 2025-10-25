@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "preserve": "bash scripts/tasks/run.sh build:wasm",
     "wasm:test": "node tests/wasm_browser_test.js",
     "serve": "node server.js web",
     "serve:web": "node server.js web",

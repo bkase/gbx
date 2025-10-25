@@ -285,7 +285,7 @@ pub fn gbx_tick(max_reports: u32) -> Result<JsValue, JsValue> {
 
 #[wasm_bindgen]
 pub fn gbx_consume_frame(
-    _start_idx: u32,
+    start_idx: u32,
     slot_count: u32,
     width: u16,
     height: u16,
@@ -302,6 +302,7 @@ pub fn gbx_consume_frame(
                 .saturating_mul(4);
             let mut pixels = vec![0u8; expected_len];
             let span_slots = slot_count.max(1);
+            let mut next_expected = start_idx;
 
             ctx.frame_pool.with_mut(|pool| {
                 let mut written = 0usize;
@@ -310,12 +311,24 @@ pub fn gbx_consume_frame(
                 for _ in 0..span_slots {
                     match pool.pop_ready() {
                         SlotPop::Ok { slot_idx } => {
+                            if slot_idx != next_expected {
+                                #[cfg(debug_assertions)]
+                                console::warn_1(
+                                    &format!(
+                                        "consume_frame: expected slot {} got {}",
+                                        next_expected, slot_idx
+                                    )
+                                    .into(),
+                                );
+                                next_expected = slot_idx;
+                            }
                             let slot = pool.slot_mut(slot_idx);
                             let take = expected_len.saturating_sub(written).min(slot.len());
                             let end = written + take;
                             pixels[written..end].copy_from_slice(&slot[..take]);
                             written = end;
                             consumed.push(slot_idx);
+                            next_expected = next_expected.saturating_add(1);
                         }
                         SlotPop::Empty => break,
                     }
