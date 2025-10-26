@@ -8,8 +8,6 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 }
 
-#[cfg(feature = "embed")]
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use once_cell::sync::{Lazy, OnceCell};
@@ -19,31 +17,14 @@ static DATA_DIR: Lazy<std::path::PathBuf> =
     Lazy::new(|| std::path::PathBuf::from(env!("TESTDATA_DATA_DIR")));
 
 struct Entry {
-    #[cfg(feature = "embed")]
-    embed_data: Option<&'static [u8]>,
     cache: OnceCell<Arc<[u8]>>,
 }
 
-#[cfg(feature = "embed")]
-fn embed_lookup() -> HashMap<&'static str, &'static [u8]> {
-    generated::EMBED_DATA.iter().copied().collect()
-}
-
 static ENTRIES: Lazy<Vec<Entry>> = Lazy::new(|| {
-    #[cfg(feature = "embed")]
-    let embed = embed_lookup();
-
     generated::ROMS
         .iter()
-        .map(|meta| {
-            #[cfg(not(feature = "embed"))]
-            let _ = meta;
-
-            Entry {
-                #[cfg(feature = "embed")]
-                embed_data: embed.get(meta.path).copied(),
-                cache: OnceCell::new(),
-            }
+        .map(|_| Entry {
+            cache: OnceCell::new(),
         })
         .collect()
 });
@@ -94,11 +75,6 @@ fn load_entry(idx: usize) -> Arc<[u8]> {
     ENTRIES[idx]
         .cache
         .get_or_init(|| {
-            #[cfg(feature = "embed")]
-            if let Some(data) = ENTRIES[idx].embed_data {
-                return Arc::from(data);
-            }
-
             let meta = &generated::ROMS[idx];
             let file_path = DATA_DIR.join(meta.path);
             let bytes = std::fs::read(&file_path)

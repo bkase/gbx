@@ -1,12 +1,14 @@
 //! Service registration for GBX WASM worker.
 
 use fabric_worker_wasm::{build_worker_endpoint, FABRIC_ENDPOINTS, FABRIC_RUNTIME};
+use kernel_core::CoreConfig;
 use service_abi::{Service, SubmitOutcome};
 use services_audio::AudioService;
 use services_fs::FsService;
 use services_gpu::GpuService;
 use services_kernel::KernelService;
 use std::cell::RefCell;
+use std::num::NonZeroUsize;
 use transport::schema::{
     TAG_AUDIO_CMD, TAG_AUDIO_REP, TAG_FS_CMD, TAG_FS_REP, TAG_GPU_CMD, TAG_GPU_REP, TAG_KERNEL_CMD,
     TAG_KERNEL_REP,
@@ -134,9 +136,32 @@ pub fn worker_register_services(_layout_ptr: u32, _layout_len: u32) -> i32 {
             None => return ERR_NOT_INIT,
         };
 
+        let frame_pool = match kernel_endpoint.slot_pools().get(0).cloned() {
+            Some(pool) => pool,
+            None => {
+                console::error_1(&"worker_register_services: kernel slot pool missing".into());
+                return ERR_BAD_LAYOUT;
+            }
+        };
+
+        let core_config = CoreConfig {
+            lanes: NonZeroUsize::new(8).expect("lanes must be non-zero"),
+            ..CoreConfig::default()
+        };
+
+        console::log_1(
+            &format!(
+                "worker_register_services: kernel lanes={}",
+                core_config.lanes
+            )
+            .into(),
+        );
+
+        let kernel_service = KernelService::new_with_frame_pool(64, frame_pool, core_config);
+
         runtime.register(FabricServiceEngine::new(
             kernel_endpoint,
-            KernelService::default(),
+            kernel_service,
             "kernel",
         ));
         console::log_1(&"worker_register_services: kernel registered".into());

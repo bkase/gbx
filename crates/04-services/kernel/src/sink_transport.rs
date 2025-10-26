@@ -29,7 +29,16 @@ impl TransportFrameSink {
         expected_len: usize,
         mut write: impl FnMut(&mut [u8]),
     ) -> Option<(Arc<[u8]>, Option<SlotSpan>)> {
-        let slot_idx = self.pool.with_mut(|pool| pool.try_acquire_free())?;
+        let slot_idx = self.pool.with_mut(|pool| pool.try_acquire_free());
+        let Some(slot_idx) = slot_idx else {
+            log::trace!(
+                "TransportFrameSink::produce_frame: free slot unavailable (expected_len={}) – falling back to inline pixels",
+                expected_len
+            );
+            let mut buf = vec![0u8; expected_len];
+            write(&mut buf[..]);
+            return Some((Arc::from(buf.into_boxed_slice()), None));
+        };
 
         let written = self.pool.with_mut(|pool| {
             let slot = pool.slot_mut(slot_idx);
@@ -38,30 +47,23 @@ impl TransportFrameSink {
             usable_len
         });
 
-        let mut waited = false;
-        loop {
-            match self.pool.with_mut(|pool| pool.push_ready(slot_idx)) {
-                SlotPush::Ok => {
-                    let empty = Arc::<[u8]>::from(&[][..]);
-                    let span = SlotSpan {
-                        start_idx: slot_idx,
-                        count: 1,
-                    };
-                    return Some((empty, Some(span)));
-                }
-                SlotPush::WouldBlock if !waited => {
-                    self.pool.with_ref(|pool| pool.wait_for_ready_drain());
-                    waited = true;
-                }
-                SlotPush::WouldBlock => {
-                    let pixels = self.pool.with_mut(|pool| {
-                        let slot = pool.slot_mut(slot_idx);
-                        let copy = Vec::from(&slot[..written]);
-                        pool.release_free(slot_idx);
-                        Arc::<[u8]>::from(copy.into_boxed_slice())
-                    });
-                    return Some((pixels, None));
-                }
+        match self.pool.with_mut(|pool| pool.push_ready(slot_idx)) {
+            SlotPush::Ok => {
+                let empty = Arc::<[u8]>::from(&[][..]);
+                let span = SlotSpan {
+                    start_idx: slot_idx,
+                    count: 1,
+                };
+                Some((empty, Some(span)))
+            }
+            SlotPush::WouldBlock => {
+                let pixels = self.pool.with_mut(|pool| {
+                    let slot = pool.slot_mut(slot_idx);
+                    let copy = Vec::from(&slot[..written]);
+                    pool.release_free(slot_idx);
+                    Arc::<[u8]>::from(copy.into_boxed_slice())
+                });
+                Some((pixels, None))
             }
         }
     }

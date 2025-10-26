@@ -45,6 +45,8 @@ const server = http.createServer((req, res) => {
     const ext = path.extname(dest);
     const contentType = MIME.get(ext) || 'application/octet-stream';
     res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
     // SharedArrayBuffer requires these headers
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');

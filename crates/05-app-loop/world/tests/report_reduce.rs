@@ -3,7 +3,7 @@
 use service_abi::{CpuVM, DebugRep, InspectorVMMinimal, PpuVM, TimersVM};
 use world::{
     AudioRep, AvCmd, FrameSpan, GpuCmd, Intent, IntentPriority, KernelRep, Report, ReportReducer,
-    World,
+    ViewMode, World,
 };
 
 /// Frames for the active display lane should be forwarded to the GPU immediately.
@@ -29,6 +29,33 @@ fn kernel_display_lane_frame_emits_gpu_upload() {
     );
     assert!(follow_ups.deferred_intents.is_empty());
     assert_eq!(world.perf.last_frame_id, 42);
+}
+
+/// Grid mode should forward every lane, even when it differs from the display lane.
+#[test]
+fn grid_view_forwards_all_lanes() {
+    let mut world = World::new();
+    world.set_view_mode(ViewMode::Grid);
+
+    let span = FrameSpan::default();
+    let lane = world.display_lane + 3;
+    let follow_ups = world.reduce_report(Report::Kernel(KernelRep::LaneFrame {
+        group: 0,
+        lane,
+        span: span.clone(),
+        frame_id: 99,
+    }));
+
+    assert_eq!(follow_ups.immediate_av.len(), 1);
+    assert_eq!(
+        follow_ups.immediate_av[0],
+        AvCmd::Gpu(GpuCmd::UploadFrame { lane, span })
+    );
+    assert!(follow_ups.deferred_intents.is_empty());
+    assert_eq!(
+        world.perf.last_frame_id, 0,
+        "non-display lanes should not update primary frame tracker"
+    );
 }
 
 /// Auto-pump worlds should enqueue an intent after each tick completes.

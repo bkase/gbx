@@ -1,7 +1,7 @@
 //! Pure report reducer implementation for the Wave B world state.
 
 use crate::types::{AudioRep, AvCmd, FollowUps, GpuCmd, Intent, IntentPriority, KernelRep, Report};
-use crate::world::World;
+use crate::world::{ViewMode, World};
 
 /// Trait for handling reports and producing follow-up actions.
 pub trait ReportReducer {
@@ -21,11 +21,13 @@ impl ReportReducer for World {
                     frame_id,
                     ..
                 } => {
-                    if lane == self.display_lane {
+                    if matches!(self.view_mode, ViewMode::Grid) || lane == self.display_lane {
                         follow_ups
                             .push_immediate_av(AvCmd::Gpu(GpuCmd::UploadFrame { lane, span }));
                     }
-                    self.record_present(frame_id);
+                    if lane == self.display_lane {
+                        self.record_present(frame_id);
+                    }
                 }
                 KernelRep::TickDone { .. } => {
                     if self.auto_pump {

@@ -24,6 +24,15 @@ pub struct WorldHealth {
     pub service_pressure: bool,
 }
 
+/// Presentation mode for the emulator display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    /// Show a single lane (selected via `display_lane`).
+    Single,
+    /// Present every available lane simultaneously in a grid.
+    Grid,
+}
+
 /// Minimal emulator world used in Wave A scaffolding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct World {
@@ -33,6 +42,8 @@ pub struct World {
     pub speed: f32,
     /// Which lane is currently presented to the user.
     pub display_lane: u16,
+    /// How the display lanes should be presented.
+    pub view_mode: ViewMode,
     /// Whether the scheduler should enqueue autopump intents.
     pub auto_pump: bool,
     /// Whether a ROM has been successfully loaded since boot.
@@ -92,6 +103,16 @@ impl World {
         self.perf.last_frame_id = frame_id;
     }
 
+    /// Updates the preferred presentation mode for the display.
+    pub fn set_view_mode(&mut self, mode: ViewMode) {
+        self.view_mode = mode;
+    }
+
+    /// Returns the active presentation mode.
+    pub fn view_mode(&self) -> ViewMode {
+        self.view_mode
+    }
+
     /// Helper used by tests to track an audio underrun event.
     pub fn record_audio_underrun(&mut self) {
         self.perf.audio_underruns = self.perf.audio_underruns.saturating_add(1);
@@ -135,6 +156,7 @@ impl Default for World {
             paused: false,
             speed: 1.0,
             display_lane: 0,
+            view_mode: ViewMode::Single,
             auto_pump: true,
             rom_loaded: false,
             rom_events: 0,

@@ -15,6 +15,8 @@ pub enum AnyCore {
     Simd2(Box<Core<SimdExec<2>, BusSimd<2>>>),
     /// Four-lane SIMD backend.
     Simd4(Box<Core<SimdExec<4>, BusSimd<4>>>),
+    /// Eight-lane SIMD backend.
+    Simd8(Box<Core<SimdExec<8>, BusSimd<8>>>),
 }
 
 impl AnyCore {
@@ -23,6 +25,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.step_cycles(budget),
             AnyCore::Simd2(core) => core.step_cycles(budget),
             AnyCore::Simd4(core) => core.step_cycles(budget),
+            AnyCore::Simd8(core) => core.step_cycles(budget),
         }
     }
 
@@ -31,6 +34,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.step_instruction(),
             AnyCore::Simd2(core) => core.step_instruction(),
             AnyCore::Simd4(core) => core.step_instruction(),
+            AnyCore::Simd8(core) => core.step_instruction(),
         }
     }
 
@@ -39,6 +43,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.frame_ready(),
             AnyCore::Simd2(core) => core.frame_ready(),
             AnyCore::Simd4(core) => core.frame_ready(),
+            AnyCore::Simd8(core) => core.frame_ready(),
         }
     }
 
@@ -47,6 +52,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.load_rom(rom),
             AnyCore::Simd2(core) => core.load_rom(rom),
             AnyCore::Simd4(core) => core.load_rom(rom),
+            AnyCore::Simd8(core) => core.load_rom(rom),
         }
     }
 
@@ -55,6 +61,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.reset_post_boot(model),
             AnyCore::Simd2(core) => core.reset_post_boot(model),
             AnyCore::Simd4(core) => core.reset_post_boot(model),
+            AnyCore::Simd8(core) => core.reset_post_boot(model),
         }
     }
 
@@ -63,6 +70,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.reset_power_on(model),
             AnyCore::Simd2(core) => core.reset_power_on(model),
             AnyCore::Simd4(core) => core.reset_power_on(model),
+            AnyCore::Simd8(core) => core.reset_power_on(model),
         }
     }
 
@@ -71,6 +79,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.has_boot_rom(),
             AnyCore::Simd2(core) => core.has_boot_rom(),
             AnyCore::Simd4(core) => core.has_boot_rom(),
+            AnyCore::Simd8(core) => core.has_boot_rom(),
         }
     }
 
@@ -80,6 +89,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.boot_rom_enabled(),
             AnyCore::Simd2(core) => core.boot_rom_enabled(),
             AnyCore::Simd4(core) => core.boot_rom_enabled(),
+            AnyCore::Simd8(core) => core.boot_rom_enabled(),
         }
     }
 
@@ -88,6 +98,7 @@ impl AnyCore {
             AnyCore::Scalar(core) => core.set_boot_rom_enabled(enabled),
             AnyCore::Simd2(core) => core.set_boot_rom_enabled(enabled),
             AnyCore::Simd4(core) => core.set_boot_rom_enabled(enabled),
+            AnyCore::Simd8(core) => core.set_boot_rom_enabled(enabled),
         }
     }
 }
@@ -204,6 +215,17 @@ impl Instance {
         }
     }
 
+    pub fn new_simd8(core: SimdCore<8>, sink: TransportFrameSink) -> Self {
+        Self {
+            core: AnyCore::Simd8(Box::new(core)),
+            sink,
+            next_frame_id: 0,
+            joypad: 0xFF,
+            lanes: NonZeroUsize::new(8).unwrap(),
+            boot: None,
+        }
+    }
+
     pub fn step_cycles(&mut self, budget: u32) -> u32 {
         if let Some(boot) = self.boot.as_mut() {
             return boot.step(budget);
@@ -255,7 +277,7 @@ impl Instance {
             } else {
                 match &mut self.core {
                     AnyCore::Scalar(core) => Some(BootSequence::new(core.as_mut(), rom.as_ref())),
-                    AnyCore::Simd2(_) | AnyCore::Simd4(_) => None,
+                    AnyCore::Simd2(_) | AnyCore::Simd4(_) | AnyCore::Simd8(_) => None,
                 }
             };
         }
@@ -268,6 +290,7 @@ impl Instance {
             AnyCore::Scalar(core) => core.bus.set_inputs(joypad),
             AnyCore::Simd2(core) => core.bus.set_inputs(joypad),
             AnyCore::Simd4(core) => core.bus.set_inputs(joypad),
+            AnyCore::Simd8(core) => core.bus.set_inputs(joypad),
         }
     }
 
@@ -276,6 +299,7 @@ impl Instance {
             AnyCore::Scalar(core) => Scalar::to_u16(core.cpu.pc),
             AnyCore::Simd2(core) => SimdExec::<2>::to_u16(core.cpu.pc),
             AnyCore::Simd4(core) => SimdExec::<4>::to_u16(core.cpu.pc),
+            AnyCore::Simd8(core) => SimdExec::<8>::to_u16(core.cpu.pc),
         }
     }
 
@@ -325,6 +349,7 @@ impl Instance {
             }
             AnyCore::Simd2(core) => inspector_from_simd::<2>(core),
             AnyCore::Simd4(core) => inspector_from_simd::<4>(core),
+            AnyCore::Simd8(core) => inspector_from_simd::<8>(core),
         }
     }
 
@@ -338,29 +363,50 @@ impl Instance {
             },
             AnyCore::Simd2(core) => mem_window_simd::<2>(core, space, base, len),
             AnyCore::Simd4(core) => mem_window_simd::<4>(core, space, base, len),
+            AnyCore::Simd8(core) => mem_window_simd::<8>(core, space, base, len),
         }
     }
 
-    pub fn render_into(&mut self, buf: &mut [u8]) {
+    fn render_lane_into(&mut self, lane: usize, buf: &mut [u8]) {
+        let total_lanes = self.lanes.get();
+        assert!(
+            lane < total_lanes,
+            "lane {} out of range (lanes = {})",
+            lane,
+            total_lanes
+        );
         match (&mut self.boot, &mut self.core) {
             (Some(boot), AnyCore::Scalar(core)) => {
+                debug_assert_eq!(lane, 0, "scalar backend only exposes lane 0");
                 let finished = boot.render(core.as_mut(), buf);
                 if finished {
                     self.boot = None;
                 }
             }
             (Some(_), AnyCore::Simd2(core)) => {
-                core.take_frame(buf);
+                core.take_frame_lane(lane, buf);
                 self.boot = None;
             }
             (Some(_), AnyCore::Simd4(core)) => {
-                core.take_frame(buf);
+                core.take_frame_lane(lane, buf);
                 self.boot = None;
             }
-            (None, AnyCore::Scalar(core)) => core.take_frame(buf),
-            (None, AnyCore::Simd2(core)) => core.take_frame(buf),
-            (None, AnyCore::Simd4(core)) => core.take_frame(buf),
+            (Some(_), AnyCore::Simd8(core)) => {
+                core.take_frame_lane(lane, buf);
+                self.boot = None;
+            }
+            (None, AnyCore::Scalar(core)) => {
+                debug_assert_eq!(lane, 0, "scalar backend only exposes lane 0");
+                core.take_frame(buf);
+            }
+            (None, AnyCore::Simd2(core)) => core.take_frame_lane(lane, buf),
+            (None, AnyCore::Simd4(core)) => core.take_frame_lane(lane, buf),
+            (None, AnyCore::Simd8(core)) => core.take_frame_lane(lane, buf),
         }
+    }
+
+    pub fn render_into(&mut self, buf: &mut [u8]) {
+        self.render_lane_into(0, buf);
     }
 
     pub fn produce_frame(&mut self, expected_len: usize) -> Option<(Arc<[u8]>, Option<SlotSpan>)> {
@@ -370,6 +416,27 @@ impl Instance {
             // synchronously by `produce_frame`, so no other references to `self`
             // exist while we render the frame into `buf`.
             unsafe { (&mut *this).render_into(buf) }
+        })
+    }
+
+    pub fn produce_frame_for_lane(
+        &mut self,
+        expected_len: usize,
+        lane: usize,
+    ) -> Option<(Arc<[u8]>, Option<SlotSpan>)> {
+        let total_lanes = self.lanes.get();
+        assert!(
+            lane < total_lanes,
+            "lane {} out of range (lanes = {})",
+            lane,
+            total_lanes
+        );
+        let this = self as *mut Instance;
+        self.sink.produce_frame(expected_len, |buf| {
+            // SAFETY: `this` is a raw pointer to `self`. The closure is executed
+            // synchronously by `produce_frame`, so no other references to `self`
+            // exist while we render the frame into `buf`.
+            unsafe { (&mut *this).render_lane_into(lane, buf) }
         })
     }
 

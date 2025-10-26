@@ -95,9 +95,6 @@ pub(crate) const SOURCE_VENDOR: &str = "skipped";
 pub(crate) const SOURCE_URL: &str = "";
 
 pub(crate) static ROMS: &[RomMeta] = &[];
-
-#[cfg(feature = "embed")]
-pub(crate) static EMBED_DATA: &[(&str, &[u8])] = &[];
 "#;
         fs::write(&generated_path, stub)?;
         println!(
@@ -161,8 +158,6 @@ pub(crate) static EMBED_DATA: &[(&str, &[u8])] = &[];
     writeln!(&mut generated)?;
     generated.push_str("pub(crate) static ROMS: &[RomMeta] = &[\n");
 
-    let mut embed_lines: Vec<String> = Vec::new();
-
     for rom in &manifest.roms {
         let source_file = bundle_dir.join(&rom.path);
         let rom_bytes =
@@ -188,26 +183,9 @@ pub(crate) static EMBED_DATA: &[(&str, &[u8])] = &[];
             rust_string(&sha),
             rom.embed
         )?;
-
-        if rom.embed {
-            let embed_source = Path::new("../../third_party/testroms")
-                .join(&manifest.source.bundle)
-                .join(&rom.path);
-            let embed_rel = embed_source.to_string_lossy().replace('\\', "/");
-            embed_lines.push(format!(
-                "    ({}, include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{embed_rel}\")).as_slice()),\n",
-                rust_string(&rom.path)
-            ));
-        }
     }
 
     generated.push_str("];\n\n");
-    generated.push_str("#[cfg(feature = \"embed\")]\n");
-    generated.push_str("pub(crate) static EMBED_DATA: &[(&str, &[u8])] = &[\n");
-    for line in embed_lines {
-        generated.push_str(&line);
-    }
-    generated.push_str("];\n");
 
     let generated_path = out_dir.join("generated.rs");
     let mut file = fs::File::create(&generated_path)?;

@@ -1,3 +1,5 @@
+console.log(`Worker bootstrap loaded at ${Date.now()}`);
+
 import init, {
   fabric_worker_init,
   fabric_worker_run,

@@ -9,6 +9,7 @@ use crate::instance::Instance;
 use crate::sink_transport::TransportFrameSink;
 use kernel_core::ppu_stub::CYCLES_PER_FRAME;
 use kernel_core::{BusScalar, BusSimd, Core, CoreConfig, Model, SimdCore};
+use log::{debug, trace};
 use service_abi::{
     DebugCmd, DebugRep, FrameSpan, KernelCmd, KernelRep, KernelServiceHandle, Service, StepKind,
     SubmitOutcome, SubmitPolicy, TickPurpose,
@@ -17,86 +18,22 @@ use services_common::{drain_queue, try_submit_queue, LocalQueue};
 use smallvec::{smallvec, SmallVec};
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
-use std::env;
-use std::fs;
-use std::panic::{self, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
-use testdata::bytes as test_rom_bytes;
+use std::sync::Arc;
 use transport::{SlotPool, SlotPoolConfig, SlotPoolHandle};
-
-const DEFAULT_ROM_PATH: &str = "blargg/cpu_instrs/individual/03-op sp,hl.gb";
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsValue;
 
 fn load_dmg_boot_rom() -> Option<Arc<[u8]>> {
-    static BOOT_ROM: OnceLock<Option<Arc<[u8]>>> = OnceLock::new();
-    BOOT_ROM
-        .get_or_init(|| {
-            let path = env::var("GBX_BOOT_ROM_DMG")
-                .ok()
-                .map(PathBuf::from)
-                .or_else(|| {
-                    let default = Path::new("third_party/bootroms/dmg.bin");
-                    if default.exists() {
-                        Some(default.to_path_buf())
-                    } else {
-                        None
-                    }
-                });
-
-            let Some(path) = path else {
-                return None;
-            };
-
-            match fs::read(&path) {
-                Ok(bytes) => {
-                    if bytes.len() != 0x100 {
-                        eprintln!(
-                            "warning: DMG boot ROM {:?} has unexpected length {} (expected 256 bytes)",
-                            path,
-                            bytes.len()
-                        );
-                        None
-                    } else {
-                        Some(Arc::<[u8]>::from(bytes.into_boxed_slice()))
-                    }
-                }
-                Err(err) => {
-                    eprintln!("warning: failed to load DMG boot ROM {:?}: {}", path, err);
-                    None
-                }
-            }
-        })
-        .clone()
+    // Runtime environments are expected to provide the DMG boot ROM via
+    // explicit `LoadRom` commands. Returning `None` keeps the core on the
+    // post-boot path until a ROM is supplied.
+    None
 }
 
 fn load_default_rom() -> Arc<[u8]> {
-    if let Ok(path) = env::var("GBX_DEFAULT_ROM") {
-        match fs::read(&path) {
-            Ok(bytes) => {
-                if bytes.is_empty() {
-                    eprintln!(
-                        "warning: default ROM at {:?} is empty; falling back to {}",
-                        path, DEFAULT_ROM_PATH
-                    );
-                } else {
-                    return Arc::from(bytes.into_boxed_slice());
-                }
-            }
-            Err(err) => eprintln!(
-                "warning: failed to read default ROM from {:?}: {}; falling back to {}",
-                path, err, DEFAULT_ROM_PATH
-            ),
-        }
-    }
-    match panic::catch_unwind(AssertUnwindSafe(|| test_rom_bytes(DEFAULT_ROM_PATH))) {
-        Ok(rom) => rom,
-        Err(_) => {
-            eprintln!(
-                "warning: failed to load {DEFAULT_ROM_PATH} from testdata; using blank ROM fallback"
-            );
-            Arc::from(vec![0u8; 0x8000].into_boxed_slice())
-        }
-    }
+    // Always start with a blank cartridge; frontends must supply ROM bytes via
+    // an explicit `LoadRom` intent.
+    Arc::from(vec![0u8; 0x8000].into_boxed_slice())
 }
 
 struct SingleThreadCell<T> {
@@ -194,6 +131,19 @@ impl KernelFarm {
                     }
                     Instance::new_simd4(core, sink)
                 }
+                8 => {
+                    let mut core = SimdCore::<8>::new(
+                        BusSimd::new(Arc::clone(&self.default_rom), self.boot_rom.clone()),
+                        self.core_config,
+                        Model::Dmg,
+                    );
+                    if self.boot_rom.is_some() {
+                        core.reset_power_on(Model::Dmg);
+                    } else {
+                        core.reset_post_boot(Model::Dmg);
+                    }
+                    Instance::new_simd8(core, sink)
+                }
                 _ => panic!("unsupported SIMD lane count {}", lanes),
             };
             self.instances.insert(id, instance);
@@ -201,9 +151,83 @@ impl KernelFarm {
         self.instances.get_mut(&id).expect("instance exists")
     }
 
+    fn publish_lane_frames(
+        id: u16,
+        inst: &mut Instance,
+        expected_len: usize,
+        width: u16,
+        height: u16,
+        out: &mut Vec<KernelRep>,
+    ) -> bool {
+        let mut published = false;
+        let lanes = inst.lanes.get();
+        if lanes == 1 {
+            if let Some((pixels, slot_span)) = inst.produce_frame(expected_len) {
+                trace!(
+                    "publish_lane_frames: scalar lane=0 frame_id={} slot_span={:?} bytes={}",
+                    inst.next_frame_id + 1,
+                    slot_span.as_ref().map(|s| (s.start_idx, s.count)),
+                    pixels.len()
+                );
+                let frame_id = inst.bump_frame_id();
+                out.push(KernelRep::LaneFrame {
+                    group: id,
+                    lane: 0,
+                    span: FrameSpan {
+                        width,
+                        height,
+                        pixels,
+                        slot_span,
+                    },
+                    frame_id,
+                });
+                return true;
+            }
+            return false;
+        }
+
+        for lane in 0..lanes {
+            if let Some((pixels, slot_span)) = inst.produce_frame_for_lane(expected_len, lane) {
+                trace!(
+                    "publish_lane_frames: lane={} frame_id={} slot_span={:?} bytes={}",
+                    lane,
+                    inst.next_frame_id + 1,
+                    slot_span.as_ref().map(|s| (s.start_idx, s.count)),
+                    pixels.len()
+                );
+                let frame_id = inst.bump_frame_id();
+                out.push(KernelRep::LaneFrame {
+                    group: id,
+                    lane: lane as u16,
+                    span: FrameSpan {
+                        width,
+                        height,
+                        pixels,
+                        slot_span,
+                    },
+                    frame_id,
+                });
+                published = true;
+            }
+        }
+        published
+    }
+
     pub fn tick(&mut self, id: u16, budget: u32, out: &mut Vec<KernelRep>) -> u32 {
         let inst = self.ensure_instance(id);
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "kernel::tick wasm start group={id}"
+        )));
         let mut cycles = inst.step_cycles(budget);
+        let initial_ready = inst.frame_ready();
+        let boot_active = inst.boot_active();
+        debug!(
+            "kernel::tick start group={id} budget={budget} cycles={cycles} frame_ready={} boot_active={} lanes={}",
+            initial_ready,
+            boot_active,
+            inst.lanes.get(),
+        );
         let (mut width, mut height) = inst.sink.dimensions();
         if width == 0 {
             width = 160;
@@ -221,72 +245,90 @@ impl KernelFarm {
 
         let mut published = false;
         if inst.frame_ready() {
-            if let Some((pixels, slot_span)) = inst.produce_frame(expected_len) {
-                let frame_id = inst.bump_frame_id();
-                out.push(KernelRep::LaneFrame {
-                    group: id,
-                    lane: 0,
-                    span: FrameSpan {
-                        width,
-                        height,
-                        pixels,
-                        slot_span,
-                    },
-                    frame_id,
-                });
-                published = true;
-            }
+            trace!("kernel::tick: publishing frames immediately");
+            published = Self::publish_lane_frames(id, inst, expected_len, width, height, out);
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::log_1(&JsValue::from_str(&format!(
+                "kernel::tick wasm publish immediate group={id} frames={}",
+                out.len()
+            )));
         }
 
         if !published && inst.boot_active() {
-            if let Some((pixels, slot_span)) = inst.produce_frame(expected_len) {
-                let frame_id = inst.bump_frame_id();
-                out.push(KernelRep::LaneFrame {
-                    group: id,
-                    lane: 0,
-                    span: FrameSpan {
-                        width,
-                        height,
-                        pixels,
-                        slot_span,
-                    },
-                    frame_id,
-                });
-            }
+            trace!("kernel::tick: boot path publish attempt");
+            published = Self::publish_lane_frames(id, inst, expected_len, width, height, out);
         }
+
         if !published && !inst.boot_active() {
+            const EXTRA_ATTEMPTS: usize = 32;
             let mut attempt = 0;
-            while attempt < 4 && !inst.boot_active() {
+            while attempt < EXTRA_ATTEMPTS && !inst.boot_active() {
                 let extra = inst.step_cycles(CYCLES_PER_FRAME);
+                trace!(
+                    "kernel::tick: extra attempt={} produced cycles={extra} frame_ready={} boot_active={}",
+                    attempt,
+                    inst.frame_ready(),
+                    inst.boot_active()
+                );
                 if extra == 0 {
+                    trace!(
+                        "kernel::tick: extra step produced zero cycles (attempt={})",
+                        attempt
+                    );
                     break;
                 }
                 cycles = cycles.wrapping_add(extra);
                 if inst.frame_ready() {
-                    if let Some((pixels, slot_span)) = inst.produce_frame(expected_len) {
-                        let frame_id = inst.bump_frame_id();
-                        out.push(KernelRep::LaneFrame {
-                            group: id,
-                            lane: 0,
-                            span: FrameSpan {
-                                width,
-                                height,
-                                pixels,
-                                slot_span,
-                            },
-                            frame_id,
-                        });
+                    trace!(
+                        "kernel::tick: frame ready after extra attempt={} cycles={}",
+                        attempt,
+                        cycles
+                    );
+                    if Self::publish_lane_frames(id, inst, expected_len, width, height, out) {
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::log_1(&JsValue::from_str(&format!(
+                            "kernel::tick wasm publish after extra attempt={attempt} group={id}"
+                        )));
                         break;
                     }
                 }
                 attempt += 1;
             }
         }
+
+        if !published {
+            trace!("kernel::tick: forcing snapshot render (no frame_ready reported)");
+            if Self::publish_lane_frames(id, inst, expected_len, width, height, out) {
+                published = true;
+                #[cfg(target_arch = "wasm32")]
+                web_sys::console::log_1(&JsValue::from_str(&format!(
+                    "kernel::tick wasm forced snapshot group={id}"
+                )));
+            }
+        }
+        let lanes = inst.lanes.get();
+        let lanes_mask = if lanes >= u32::BITS as usize {
+            u32::MAX
+        } else {
+            (1u32 << lanes) - 1
+        };
+
         out.push(KernelRep::TickDone {
             group: id,
-            lanes_mask: ((1u32 << inst.lanes.get()) - 1),
+            lanes_mask,
             cycles_done: cycles,
         });
+        let published_frames = out
+            .iter()
+            .filter(|rep| matches!(rep, KernelRep::LaneFrame { .. }))
+            .count();
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "kernel::tick wasm end group={id} cycles_done={cycles} published_frames={published_frames} published_flag={published}"
+        )));
+        debug!(
+            "kernel::tick end group={id} cycles_done={cycles} published_frames={published_frames} published_flag={published}"
+        );
         cycles
     }
 
@@ -384,6 +426,20 @@ impl KernelService {
         core_config: CoreConfig,
     ) -> KernelServiceHandle {
         Arc::new(Self::build(capacity, frame_pool, core_config))
+    }
+
+    /// Constructs a kernel service with an explicit frame pool and core configuration.
+    pub fn new_with_frame_pool(
+        capacity: usize,
+        frame_pool: Arc<SlotPoolHandle>,
+        core_config: CoreConfig,
+    ) -> Self {
+        Self::build(capacity, frame_pool, core_config)
+    }
+
+    /// Constructs a kernel service using the default frame pool but custom core configuration.
+    pub fn new_with_config(core_config: CoreConfig) -> Self {
+        Self::build(DEFAULT_CAPACITY, default_frame_pool(), core_config)
     }
 
     fn build(capacity: usize, frame_pool: Arc<SlotPoolHandle>, core_config: CoreConfig) -> Self {

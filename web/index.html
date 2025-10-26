@@ -11,10 +11,29 @@
     color: #fff;
     font-family: monospace;
   }
-  #c {
+  .canvas-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    max-width: calc(4 * 160px + 3 * 12px);
+  }
+  .lane-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .lane-canvas {
+    width: 160px;
+    height: 144px;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     border: 2px solid #444;
+    background: #111;
+  }
+  .lane-label {
+    font-size: 12px;
+    color: #aaa;
   }
   #info {
     margin-top: 10px;
@@ -26,14 +45,18 @@
 </head>
 <body>
   <h1 id="title">GBX UI Demo</h1>
-  <canvas id="c" width="160" height="144"></canvas>
+  <div id="canvas-grid" class="canvas-grid"></div>
   <div id="info">Initializing...</div>
 
   <script type="module">
-    import init, { gbx_consume_frame, gbx_init, gbx_load_rom, gbx_tick } from "./pkg/fabric_worker_wasm.js";
+    import init, { gbx_consume_frame, gbx_init, gbx_load_rom, gbx_tick, gbx_debug_state } from "./pkg/fabric_worker_wasm.js";
+    window.__gbxExports = { gbx_consume_frame, gbx_init, gbx_load_rom, gbx_tick, gbx_debug_state };
 
-    const canvas = document.getElementById("c");
-    const ctx = canvas.getContext("2d");
+    const LANES = 8;
+    const grid = document.getElementById("canvas-grid");
+    const laneCanvases = [];
+    const laneContexts = [];
+    const laneFrameCounts = new Array(LANES).fill(0);
     const info = document.getElementById("info");
     const title = document.getElementById("title");
 
@@ -45,7 +68,9 @@
       title.textContent = "GBX UI Integration Test";
     }
 
-    const ROM_PATH = "./roms/tetris.gb";
+    const romParam = params.get("rom") || "tetris.gb";
+    const ROM_PATH = `./roms/${romParam}`;
+    const romLabel = romParam.replace(/\.[^.]+$/, "");
 
     function setInfo(msg) {
       if (isTest) {
@@ -75,24 +100,64 @@
       throw new Error(msg);
     }
 
-    function ensureCanvasSize(width, height) {
+    function setupCanvasGrid() {
+      if (laneCanvases.length === LANES) {
+        return;
+      }
+      for (let lane = 0; lane < LANES; lane++) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "lane-wrapper";
+
+        const canvas = document.createElement("canvas");
+        canvas.className = "lane-canvas";
+        canvas.width = 160;
+        canvas.height = 144;
+        canvas.dataset.lane = String(lane);
+
+        const label = document.createElement("div");
+        label.className = "lane-label";
+        label.textContent = `Lane ${lane}`;
+
+        wrapper.appendChild(canvas);
+        wrapper.appendChild(label);
+        grid.appendChild(wrapper);
+
+        laneCanvases[lane] = canvas;
+        laneContexts[lane] = canvas.getContext("2d");
+      }
+    }
+
+    setupCanvasGrid();
+
+    function ensureCanvasSize(canvas, width, height) {
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
       }
     }
 
-    function drawFrame(width, height, pixels) {
-      if (!pixels) {
-        return;
+    function drawFrame(lane, width, height, pixels) {
+      const canvas = laneCanvases[lane];
+      const context = laneContexts[lane];
+      if (!canvas || !context || !pixels) {
+        return false;
       }
-      ensureCanvasSize(width, height);
+      ensureCanvasSize(canvas, width, height);
       const data = pixels instanceof Uint8ClampedArray ? pixels : new Uint8ClampedArray(pixels);
       const image = new ImageData(data, width, height);
-      ctx.putImageData(image, 0, 0);
+      context.putImageData(image, 0, 0);
+      laneFrameCounts[lane] = (laneFrameCounts[lane] || 0) + 1;
+      const label = canvas.nextElementSibling;
+      if (label) {
+        label.textContent = `Lane ${lane} (${laneFrameCounts[lane]})`;
+      }
+      return true;
     }
 
     function consumeLaneFrame(report) {
+      const lane = Number.isFinite(report.lane)
+        ? Math.max(0, Math.min(LANES - 1, Number(report.lane)))
+        : 0;
       let width = report.width || 160;
       let height = report.height || 144;
       let pixels = null;
@@ -105,13 +170,17 @@
         width = frame.width || width;
         height = frame.height || height;
         pixels = frame.pixels;
+        if (window.__gbxDebug !== false) {
+          const sample = pixels instanceof Uint8ClampedArray ? pixels.slice(0, 16) : Array.from(pixels.slice(0, 16));
+          console.log(`consumeLaneFrame lane=${lane} frame_id=${report.frame_id} slot_idx=${report.start_idx} slot_count=${slotCount} sample=${sample}`);
+        }
       }
 
       if (pixels) {
-        drawFrame(width, height, pixels);
+        return drawFrame(lane, width, height, pixels);
       }
 
-      return Boolean(pixels);
+      return false;
     }
 
     async function fetchRomBytes() {
@@ -130,7 +199,7 @@
         gbx_init();
         pass("gbx_init() succeeded");
 
-        log("Loading blargg 03 ROM...");
+        log(`Loading ROM: ${romLabel} (${ROM_PATH})...`);
         const rom = await fetchRomBytes();
         gbx_load_rom(rom);
         pass("gbx_load_rom() succeeded");
@@ -173,13 +242,13 @@
       try {
         const rom = await fetchRomBytes();
         gbx_load_rom(rom);
-        info.textContent = "ROM loaded. Running...";
+        info.textContent = `ROM loaded (${romLabel}). Running...`;
       } catch (e) {
         info.textContent = `ROM load failed: ${e.message}`;
         throw e;
       }
 
-      let frameCount = 0;
+      let totalFrames = 0;
       let startTime = Date.now();
 
       function loop() {
@@ -187,14 +256,17 @@
           const reports = gbx_tick(64);
           for (const report of reports) {
             if (report.type === "Kernel.LaneFrame" && consumeLaneFrame(report)) {
-              frameCount++;
+              totalFrames++;
             }
           }
 
-          if (frameCount > 0 && frameCount % 60 === 0) {
+          if (totalFrames > 0 && totalFrames % 60 === 0) {
             const elapsed = (Date.now() - startTime) / 1000;
-            const fps = (frameCount / Math.max(elapsed, 0.001)).toFixed(1);
-            info.textContent = `Frames: ${frameCount} | FPS: ${fps}`;
+            const fps = (totalFrames / Math.max(elapsed, 0.001)).toFixed(1);
+            const laneSummary = laneFrameCounts
+              .map((count, lane) => `L${lane}:${count}`)
+              .join(" ");
+            info.textContent = `Frames: ${totalFrames} | FPS: ${fps} | ${laneSummary}`;
           }
         } catch (e) {
           info.textContent = `Runtime error: ${e}`;

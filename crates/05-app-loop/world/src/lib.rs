@@ -22,5 +22,5 @@ pub use crate::types::{
     Intent, IntentPriority, KernelCmd, KernelRep, Report, SlotSpan, SubmitOutcome, SubmitPolicy,
     TickPurpose, WorkCmd,
 };
-pub use crate::world::{World, WorldHealth, WorldPerf};
+pub use crate::world::{ViewMode, World, WorldHealth, WorldPerf};
 pub use inspector::InspectorState;

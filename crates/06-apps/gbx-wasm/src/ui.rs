@@ -9,7 +9,7 @@ use web_sys::console;
 use app::Scheduler;
 use services_fabric::TransportServices;
 use transport::{SlotPoolHandle, SlotPop};
-use world::{Intent, IntentPriority, KernelRep, Report};
+use world::{Intent, IntentPriority, KernelRep, Report, ViewMode};
 
 use crate::{fabric_worker_init, fabric_worker_run, worker_register_services};
 
@@ -114,7 +114,8 @@ pub fn gbx_init() -> Result<(), JsValue> {
 
         console::log_1(&"gbx_init: creating world and scheduler".into());
         let world = world::World::default();
-        let scheduler = Scheduler::new(world, hub);
+        let mut scheduler = Scheduler::new(world, hub);
+        scheduler.world_mut().set_view_mode(ViewMode::Grid);
 
         CTX.with(|c| {
             *c.borrow_mut() = Some(UiCtx {
@@ -311,6 +312,18 @@ pub fn gbx_consume_frame(
                 for _ in 0..span_slots {
                     match pool.pop_ready() {
                         SlotPop::Ok { slot_idx } => {
+                            #[cfg(debug_assertions)]
+                            console::debug_1(
+                                &format!(
+                                    "gbx_consume_frame: popped slot idx={} (expected={}) span_slots={} ready_len={} free_len={}",
+                                    slot_idx,
+                                    next_expected,
+                                    span_slots,
+                                    pool.ready_len(),
+                                    pool.free_len()
+                                )
+                                .into(),
+                            );
                             if slot_idx != next_expected {
                                 #[cfg(debug_assertions)]
                                 console::warn_1(
@@ -330,7 +343,17 @@ pub fn gbx_consume_frame(
                             consumed.push(slot_idx);
                             next_expected = next_expected.saturating_add(1);
                         }
-                        SlotPop::Empty => break,
+                        SlotPop::Empty => {
+                            #[cfg(debug_assertions)]
+                            console::warn_1(
+                                &format!(
+                                    "gbx_consume_frame: ready ring empty (expected_start={} written_bytes={})",
+                                    next_expected, written
+                                )
+                                .into(),
+                            );
+                            break;
+                        }
                     }
                 }
 

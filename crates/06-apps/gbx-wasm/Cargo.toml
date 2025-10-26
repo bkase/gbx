@@ -25,6 +25,7 @@ services-kernel = { path = "../../04-services/kernel" }
 services-gpu = { path = "../../04-services/gpu" }
 services-audio = { path = "../../04-services/audio" }
 services-fs = { path = "../../04-services/fs" }
+kernel-core = { path = "../../04-services/kernel-core" }
 transport-scenarios = { path = "../../01-transport/transport-scenarios" }
 gbx-frame = { path = "../../05-app-loop/gbx-frame" }
 smallvec = { workspace = true }

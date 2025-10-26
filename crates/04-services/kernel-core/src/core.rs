@@ -521,6 +521,47 @@ impl<E: Exec, B: CoreBus<E>> Core<E, B> {
     }
 }
 
+impl<const LANES: usize> Core<SimdExec<LANES>, BusSimd<LANES>>
+where
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    /// Renders the current frame for a specific SIMD lane into `out_rgba`.
+    pub fn take_frame_lane(&mut self, lane: usize, out_rgba: &mut [u8]) {
+        assert!(
+            lane < LANES,
+            "lane index {} out of range for {}-lane core",
+            lane,
+            LANES
+        );
+
+        let width = usize::from(self.config.frame_width);
+        let height = usize::from(self.config.frame_height);
+        let expected_len = width
+            .checked_mul(height)
+            .and_then(|px| px.checked_mul(4))
+            .expect("frame dimensions should not overflow");
+        assert!(
+            out_rgba.len() >= expected_len,
+            "frame buffer too small (have {}, need {})",
+            out_rgba.len(),
+            expected_len
+        );
+
+        let lane_bus = self.bus.lane(lane);
+        self.ppu.render_frame(
+            lane_bus.ppu_io(),
+            lane_bus.ppu_vram(),
+            lane_bus.ppu_oam(),
+            out_rgba,
+            self.config.frame_width,
+            self.config.frame_height,
+        );
+
+        self.ppu.clear_frame_ready();
+        self.cycles_this_frame = 0;
+    }
+}
+
 impl Core<Scalar, BusScalar> {
     /// Convenience constructor using the scalar bus.
     pub fn from_rom(rom: Arc<[u8]>) -> Self {

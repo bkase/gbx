@@ -9,4 +9,12 @@ kernel-core = { path = "../kernel-core" }
 services-common = { path = "../../03-driver/services-common" }
 smallvec = { workspace = true }
 transport = { path = "../../01-transport/transport" }
+log = { workspace = true }
+
+[dev-dependencies]
 testdata = { path = "../../testdata" }
+env_logger = "0.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["console"] }

@@ -1,6 +1,7 @@
 use super::{instance::AnyCore, KernelFarm, KernelService};
 use kernel_core::bus::IoRegs;
 use kernel_core::ppu_stub::CYCLES_PER_FRAME;
+use kernel_core::BusScalar;
 use kernel_core::CoreConfig;
 use service_abi::{
     DebugCmd, DebugRep, FrameSpan, KernelCmd, KernelRep, KernelServiceHandle, MemSpace, StepKind,
@@ -8,9 +9,9 @@ use service_abi::{
 };
 use std::env;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use testdata::bytes as test_rom_bytes;
 use transport::{SlotPool, SlotPoolConfig, SlotPoolHandle, SlotPop};
 
 const DMG_FRAME_BYTES: usize = 160 * 144 * 4;
@@ -74,6 +75,46 @@ fn load_blank_rom(service: &KernelServiceHandle, group: u16) {
 
 fn drain_debug(service: &KernelServiceHandle, budget: usize) -> Vec<KernelRep> {
     collect_reports(service.drain(budget))
+}
+
+fn shade_to_index(shade: u8) -> u8 {
+    match shade {
+        0xFF => 0,
+        0xAA => 1,
+        0x55 => 2,
+        0x00 => 3,
+        other => panic!("unexpected DMG shade 0x{other:02X}"),
+    }
+}
+
+fn program_lane_tile(bus: &mut BusScalar, lane: u8) {
+    // Enable LCD and background rendering with identity palette mapping.
+    bus.io.write(IoRegs::LCDC, 0x91);
+    bus.io.write(IoRegs::BGP, 0xE4);
+
+    // Populate tile 0 with a two-pixel signature that encodes the lane index.
+    let tile = &mut bus.vram[..16];
+    tile.fill(0);
+
+    let mut lsb = 0u8;
+    let mut msb = 0u8;
+    let set_pixel = |lsb: &mut u8, msb: &mut u8, x: u8, color: u8| {
+        let mask = 1u8 << (7 - x);
+        if (color & 0x01) != 0 {
+            *lsb |= mask;
+        }
+        if (color & 0x02) != 0 {
+            *msb |= mask;
+        }
+    };
+
+    let color_low = lane & 0x03;
+    let color_hi = if (lane >> 2) & 0x01 != 0 { 0x03 } else { 0x00 };
+    set_pixel(&mut lsb, &mut msb, 0, color_low);
+    set_pixel(&mut lsb, &mut msb, 1, color_hi);
+
+    tile[0] = lsb;
+    tile[1] = msb;
 }
 #[test]
 fn tick_produces_frame() {
@@ -165,6 +206,102 @@ fn frame_reports_slot_span_when_ready() {
 }
 
 #[test]
+fn simd8_lane_frames_are_unique_and_release_slots() {
+    let frame_pool = Arc::new(SlotPoolHandle::new(
+        SlotPool::new(SlotPoolConfig {
+            slot_count: 16,
+            slot_size: DMG_FRAME_BYTES,
+        })
+        .expect("slot pool"),
+    ));
+
+    let config = CoreConfig {
+        lanes: NonZeroUsize::new(8).expect("non-zero lanes"),
+        ..Default::default()
+    };
+    let mut farm = KernelFarm::new(Arc::clone(&frame_pool), config);
+    let blank_rom = Arc::<[u8]>::from(vec![0x00u8; 0x8000].into_boxed_slice());
+    farm.load_rom(0, Arc::clone(&blank_rom));
+
+    {
+        let inst = farm.ensure_instance(0);
+        match &mut inst.core {
+            AnyCore::Simd8(core) => {
+                for lane in 0..8 {
+                    program_lane_tile(core.bus.lane_mut(lane), lane as u8);
+                }
+            }
+            _ => panic!("expected Simd8 backend"),
+        }
+    }
+
+    let mut reports = Vec::new();
+    farm.tick(0, CYCLES_PER_FRAME, &mut reports);
+
+    let mut lane_frames: Vec<(u16, FrameSpan)> = reports
+        .into_iter()
+        .filter_map(|rep| match rep {
+            KernelRep::LaneFrame { lane, span, .. } => Some((lane, span)),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        lane_frames.len(),
+        8,
+        "expected one frame per lane from SIMD core"
+    );
+
+    lane_frames.sort_by_key(|(lane, _)| *lane);
+
+    for (lane, span) in &lane_frames {
+        let expected_len = usize::from(span.width)
+            .saturating_mul(usize::from(span.height))
+            .saturating_mul(4);
+        let pixels = take_frame_pixels(&frame_pool, span, expected_len);
+        assert!(
+            pixels.len() >= 8,
+            "frame should contain at least two RGBA pixels"
+        );
+
+        let first_shade = shade_to_index(pixels[0]);
+        let second_shade = shade_to_index(pixels[4]);
+        assert!(
+            second_shade == 0 || second_shade == 3,
+            "unexpected high-bit shade {} for lane {}",
+            second_shade,
+            lane
+        );
+        let decoded_lane = first_shade as u16 | if second_shade == 3 { 0b100 } else { 0 };
+
+        assert_eq!(
+            decoded_lane, *lane,
+            "lane {} produced mismatched pixel signature",
+            lane
+        );
+    }
+
+    frame_pool.with_mut(|pool| {
+        let mut acquired = Vec::new();
+        while let Some(idx) = pool.try_acquire_free() {
+            acquired.push(idx);
+        }
+        let expected = pool.slot_count() as usize;
+        assert_eq!(
+            acquired.len(),
+            expected,
+            "expected all transport slots to be free after frame copy"
+        );
+        for idx in acquired {
+            pool.release_free(idx);
+        }
+        if let SlotPop::Ok { slot_idx } = pool.pop_ready() {
+            panic!("ready ring retained slot {slot_idx} after display tick");
+        }
+    });
+}
+
+#[test]
 fn backpressure_prevents_frame_without_slot() {
     let pool = Arc::new(SlotPoolHandle::new(
         SlotPool::new(SlotPoolConfig {
@@ -193,9 +330,12 @@ fn backpressure_prevents_frame_without_slot() {
     };
     service.try_submit(&tick_cmd);
     let reports = collect_reports(service.drain(4));
-    assert!(reports
-        .iter()
-        .all(|rep| matches!(rep, KernelRep::TickDone { .. })));
+    assert!(
+        reports.iter().any(
+            |rep| matches!(rep, KernelRep::LaneFrame { span, .. } if span.slot_span.is_none())
+        ),
+        "expected inline LaneFrame when no transport slot available, got {reports:?}"
+    );
 
     // Release the slot and ensure the next tick yields a frame.
     pool.with_mut(|p| p.release_free(retained_slot));
@@ -405,14 +545,15 @@ fn default_rom_matches_blargg_bundle() {
         .expect("slot pool"),
     ));
 
-    let mut farm = KernelFarm::new(frame_pool, CoreConfig::default());
+    let mut farm = KernelFarm::new(Arc::clone(&frame_pool), CoreConfig::default());
     let inst = farm.ensure_instance(0);
-    let expected = test_rom_bytes(super::DEFAULT_ROM_PATH);
+    let expected = vec![0u8; 0x8000];
     let expected_ref: &[u8] = expected.as_ref();
     let actual = match &inst.core {
         AnyCore::Scalar(core) => core.bus.rom.as_ref(),
         AnyCore::Simd2(core) => core.bus.lane(0).rom.as_ref(),
         AnyCore::Simd4(core) => core.bus.lane(0).rom.as_ref(),
+        AnyCore::Simd8(core) => core.bus.lane(0).rom.as_ref(),
     };
 
     assert_eq!(
@@ -422,7 +563,7 @@ fn default_rom_matches_blargg_bundle() {
     );
     assert_eq!(
         actual, expected_ref,
-        "default ROM contents differ from expected bundle"
+        "default ROM contents should be zero-initialised"
     );
 }
 
@@ -440,7 +581,7 @@ fn tetris_rom_produces_multiple_frames() {
         return;
     };
 
-    let mut farm = KernelFarm::new(frame_pool, CoreConfig::default());
+    let mut farm = KernelFarm::new(Arc::clone(&frame_pool), CoreConfig::default());
     let _ = farm.load_rom(0, Arc::clone(&rom));
 
     const MAX_TICKS: usize = 2048;
@@ -481,6 +622,7 @@ fn tetris_rom_produces_multiple_frames() {
                 AnyCore::Scalar(core) => core.bus.io.read(IoRegs::LCDC),
                 AnyCore::Simd2(core) => core.bus.lane(0).io.read(IoRegs::LCDC),
                 AnyCore::Simd4(core) => core.bus.lane(0).io.read(IoRegs::LCDC),
+                AnyCore::Simd8(core) => core.bus.lane(0).io.read(IoRegs::LCDC),
             };
             (inst.boot_rom_enabled(), lcdc)
         };
@@ -488,7 +630,7 @@ fn tetris_rom_produces_multiple_frames() {
         for rep in reports.into_iter() {
             if let KernelRep::LaneFrame { span, .. } = rep {
                 total_frames += 1;
-                let pixels = span.pixels.as_ref();
+                let pixels = take_frame_pixels(&frame_pool, &span, DMG_FRAME_BYTES);
                 if pixels
                     .chunks_exact(4)
                     .any(|px| px[0] != 0xFF || px[1] != 0xFF || px[2] != 0xFF)
@@ -498,7 +640,7 @@ fn tetris_rom_produces_multiple_frames() {
 
                 if overlay_enabled {
                     if boot_frame_pixels.is_none() {
-                        boot_frame_pixels = Some(pixels.to_vec());
+                        boot_frame_pixels = Some(pixels.clone());
                     }
                 } else if total_frames > 360 {
                     if let Some(boot_pixels) = boot_frame_pixels.as_ref() {
