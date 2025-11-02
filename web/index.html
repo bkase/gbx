@@ -68,7 +68,7 @@
       title.textContent = "GBX UI Integration Test";
     }
 
-    const romParam = params.get("rom") || "tetris.gb";
+    const romParam = params.get("rom") || "cpu_instrs.gb";
     const ROM_PATH = `./roms/${romParam}`;
     const romLabel = romParam.replace(/\.[^.]+$/, "");
 
@@ -206,7 +206,7 @@
 
         let foundLaneFrame = false;
         for (let i = 0; i < 16 && !foundLaneFrame; i++) {
-          const reports = gbx_tick(32);
+          const reports = gbx_tick(64);
           log(`Tick ${i}: ${reports.length} reports`);
           for (const r of reports) {
             log(`  Report type: ${r.type}`);
@@ -253,7 +253,7 @@
 
       function loop() {
         try {
-          const reports = gbx_tick(64);
+          const reports = gbx_tick(128);
           for (const report of reports) {
             if (report.type === "Kernel.LaneFrame" && consumeLaneFrame(report)) {
               totalFrames++;
