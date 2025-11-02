@@ -6,12 +6,12 @@ cd "$ROOT"
 
 : "${PATH:="$PATH"}"
 case ":$PATH:" in
-  *":$HOME/.cargo/bin:"*) ;;
-  *) PATH="$PATH:$HOME/.cargo/bin" ;;
+*":$HOME/.cargo/bin:"*) ;;
+*) PATH="$PATH:$HOME/.cargo/bin" ;;
 esac
 case ":$PATH:" in
-  *":$HOME/.local/bin:"*) ;;
-  *) PATH="$PATH:$HOME/.local/bin" ;;
+*":$HOME/.local/bin:"*) ;;
+*) PATH="$PATH:$HOME/.local/bin" ;;
 esac
 export PATH
 : "${NATIVE_RUSTFLAGS:="$(cat scripts/env/NATIVE_RUSTFLAGS)"}"
@@ -56,7 +56,8 @@ assets_testroms() {
 
   mkdir -p third_party/testroms
 
-  local tmp; tmp="$(mktemp)"
+  local tmp
+  tmp="$(mktemp)"
   curl -L -o "$tmp" "https://github.com/c-sp/game-boy-test-roms/releases/download/v7.0/game-boy-test-roms-v7.0.zip"
 
   if have sha256sum; then
@@ -65,7 +66,8 @@ assets_testroms() {
     echo "b9a9d7a1075aa35a3d07c07c34974048672d8520dca9e07a50178f5860c3832c  $tmp" | shasum -a 256 -c -
   fi
 
-  local staging; staging="$(mktemp -d)"
+  local staging
+  staging="$(mktemp -d)"
   unzip -q "$tmp" -d "$staging"
   rm "$tmp"
 
@@ -91,7 +93,7 @@ calc_port() {
 }
 
 format_workspace() { cargo fmt --all; }
-format_check()     { cargo fmt --all -- --check; }
+format_check() { cargo fmt --all -- --check; }
 
 lint_workspace() {
   assets_testroms
@@ -164,7 +166,8 @@ test_slow() {
 }
 
 test_wasm_smoke() {
-  local wasm_port; wasm_port="$(calc_port)"
+  local wasm_port
+  wasm_port="$(calc_port)"
   note "wasm smoke on port $wasm_port"
   build_fabric_worker_wasm
   rm -rf tests/wasm/pkg
@@ -224,9 +227,6 @@ test_demo() {
   note "demo test on port $demo"
   build_fabric_worker_wasm
   mkdir -p web/roms
-  if [ ! -f web/roms/tetris.gb ]; then
-    cp third_party/testroms/c-sp-v7.0/blargg/cpu_instrs/cpu_instrs.gb web/roms/tetris.gb
-  fi
   npm install --silent >/dev/null
   bash scripts/run-browser-test.sh web "$demo" tests/demo_browser_test.js
 }
@@ -267,20 +267,23 @@ EOF
 }
 
 case "${1:-help}" in
-  "assets:testroms") assets_testroms ;;
-  "format:workspace") format_workspace ;;
-  "format:check")     format_check ;;
-  "lint:workspace")   lint_workspace ;;
-  "build:workspace")  build_workspace ;;
-  "build:wasm")       build_wasm_app ;;
-  "build:fabric-worker-wasm") build_fabric_worker_wasm ;;
-  "test:workspace")   test_workspace ;;
-  "test:golden")      test_golden ;;
-  "test:fast")        test_fast ;;
-  "test:slow")        test_slow ;;
-  "test:wasm-smoke")  test_wasm_smoke ;;
-  "test:wasm-light")  test_wasm_light ;;
-  "test:demo")        test_demo ;;
-  "ci-parity")        ci_parity ;;
-  *) usage; exit 2 ;;
+"assets:testroms") assets_testroms ;;
+"format:workspace") format_workspace ;;
+"format:check") format_check ;;
+"lint:workspace") lint_workspace ;;
+"build:workspace") build_workspace ;;
+"build:wasm") build_wasm_app ;;
+"build:fabric-worker-wasm") build_fabric_worker_wasm ;;
+"test:workspace") test_workspace ;;
+"test:golden") test_golden ;;
+"test:fast") test_fast ;;
+"test:slow") test_slow ;;
+"test:wasm-smoke") test_wasm_smoke ;;
+"test:wasm-light") test_wasm_light ;;
+"test:demo") test_demo ;;
+"ci-parity") ci_parity ;;
+*)
+  usage
+  exit 2
+  ;;
 esac
