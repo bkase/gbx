@@ -39,6 +39,18 @@
     margin-top: 10px;
     font-size: 14px;
   }
+  #controls {
+    margin-top: 10px;
+    padding: 10px;
+    background: #333;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  #controls h3 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #8cf;
+  }
   .pass { color: #0f0; }
   .fail { color: #f00; }
 </style>
@@ -47,10 +59,14 @@
   <h1 id="title">GBX UI Demo</h1>
   <div id="canvas-grid" class="canvas-grid"></div>
   <div id="info">Initializing...</div>
+  <div id="controls">
+    <h3>Keyboard Controls:</h3>
+    Arrow Keys: D-Pad | Z: A Button | X: B Button | Enter: Start | Shift: Select
+  </div>
 
   <script type="module">
-    import init, { gbx_consume_frame, gbx_init, gbx_load_rom, gbx_tick, gbx_debug_state } from "./pkg/fabric_worker_wasm.js";
-    window.__gbxExports = { gbx_consume_frame, gbx_init, gbx_load_rom, gbx_tick, gbx_debug_state };
+    import init, { gbx_consume_frame, gbx_init, gbx_load_rom, gbx_set_inputs, gbx_tick, gbx_debug_state } from "./pkg/fabric_worker_wasm.js";
+    window.__gbxExports = { gbx_consume_frame, gbx_init, gbx_load_rom, gbx_set_inputs, gbx_tick, gbx_debug_state };
 
     const LANES = 8;
     const grid = document.getElementById("canvas-grid");
@@ -128,6 +144,53 @@
     }
 
     setupCanvasGrid();
+
+    // Keyboard input handling
+    // Game Boy joypad state (active-low: 0 = pressed, 1 = not pressed)
+    // Upper nibble (bits 4-7): A(4), B(5), Select(6), Start(7)
+    // Lower nibble (bits 0-3): Right(0), Left(1), Up(2), Down(3)
+    let joypadState = 0xFF; // All buttons released initially
+
+    const KEY_MAPPING = {
+      'z': 4,           // A button
+      'x': 5,           // B button
+      'Shift': 6,       // Select
+      'Enter': 7,       // Start
+      'ArrowRight': 0,  // Right
+      'ArrowLeft': 1,   // Left
+      'ArrowUp': 2,     // Up
+      'ArrowDown': 3,   // Down
+    };
+
+    function updateJoypad(key, pressed) {
+      const bit = KEY_MAPPING[key];
+      if (bit !== undefined) {
+        if (pressed) {
+          joypadState &= ~(1 << bit); // Clear bit (active-low)
+        } else {
+          joypadState |= (1 << bit);  // Set bit (not pressed)
+        }
+        try {
+          gbx_set_inputs(0, joypadState); // Group 0 is the display group
+        } catch (e) {
+          console.error('Failed to set inputs:', e);
+        }
+      }
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (KEY_MAPPING[e.key] !== undefined) {
+        e.preventDefault();
+        updateJoypad(e.key, true);
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (KEY_MAPPING[e.key] !== undefined) {
+        e.preventDefault();
+        updateJoypad(e.key, false);
+      }
+    });
 
     function ensureCanvasSize(canvas, width, height) {
       if (canvas.width !== width || canvas.height !== height) {

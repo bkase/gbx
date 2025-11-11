@@ -44,6 +44,13 @@ pub enum Intent {
     },
     /// Select which display lane should be presented.
     SelectDisplayLane(u16),
+    /// Update joypad input state for a kernel group.
+    SetInputs {
+        /// Kernel group identifier.
+        group: u16,
+        /// Raw joypad state (active-low: upper nibble = buttons, lower = dpad).
+        joypad: u8,
+    },
     /// Request a debug snapshot for the given kernel group.
     DebugSnapshot(u16),
     /// Request a memory window from the kernel.
@@ -68,6 +75,7 @@ impl Intent {
             Intent::SetSpeed(_) => IntentPriority::P0,
             Intent::LoadRom { .. } => IntentPriority::P0,
             Intent::SelectDisplayLane(_) => IntentPriority::P1,
+            Intent::SetInputs { .. } => IntentPriority::P0,
             Intent::DebugSnapshot(_) => IntentPriority::P1,
             Intent::DebugMem { .. } => IntentPriority::P1,
             Intent::DebugStepInstruction { .. } => IntentPriority::P0,

@@ -187,6 +187,22 @@ pub fn gbx_load_rom(bytes: Uint8Array) -> Result<(), JsValue> {
 }
 
 #[wasm_bindgen]
+pub fn gbx_set_inputs(group: u16, joypad: u8) -> Result<(), JsValue> {
+    with_guard(|| {
+        CTX.with(|c| {
+            let mut guard = c.borrow_mut();
+            let ctx = guard
+                .as_mut()
+                .ok_or_else(|| JsValue::from_str("not inited"))?;
+
+            ctx.scheduler
+                .enqueue_front_p0(Intent::SetInputs { group, joypad });
+            Ok(())
+        })
+    })
+}
+
+#[wasm_bindgen]
 pub fn gbx_tick(max_reports: u32) -> Result<JsValue, JsValue> {
     with_guard(|| {
         CTX.with(|c| {

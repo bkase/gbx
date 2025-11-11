@@ -33,6 +33,13 @@ impl IntentReducer for World {
                 self.display_lane = lane;
                 SmallVec::new()
             }
+            Intent::SetInputs { group, joypad } => {
+                smallvec![WorkCmd::Kernel(KernelCmd::SetInputs {
+                    group,
+                    lanes_mask: 0xFFFF_FFFF,
+                    joypad,
+                })]
+            }
             Intent::DebugSnapshot(group) => {
                 smallvec![WorkCmd::Kernel(KernelCmd::Debug(DebugCmd::Snapshot {
                     group

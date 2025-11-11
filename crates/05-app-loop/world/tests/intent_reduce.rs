@@ -66,6 +66,32 @@ fn load_rom_forwards_group_and_payload() {
     );
 }
 
+/// SetInputs should forward the group and joypad state to a kernel SetInputs command.
+#[test]
+fn set_inputs_forwards_group_and_joypad_state() {
+    let mut world = World::new();
+
+    let commands = world.reduce_intent(Intent::SetInputs {
+        group: 0,
+        joypad: 0b1110_1111, // A button pressed (bit 4 = 0), others released
+    });
+
+    assert_eq!(
+        commands.len(),
+        1,
+        "set inputs should emit a single kernel command"
+    );
+
+    match &commands[0] {
+        WorkCmd::Kernel(KernelCmd::SetInputs { group, lanes_mask, joypad }) => {
+            assert_eq!(*group, 0, "should target group 0");
+            assert_eq!(*lanes_mask, 0xFFFF_FFFF, "should target all lanes");
+            assert_eq!(*joypad, 0b1110_1111, "should forward joypad state");
+        }
+        other => panic!("unexpected work command for set inputs: {other:?}"),
+    }
+}
+
 /// Toggle, speed, and display lane intents mutate the world without emitting commands.
 #[test]
 fn stateful_intents_update_world_without_emitting_commands() {
